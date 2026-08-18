@@ -10,20 +10,20 @@
 
 ## 0.9.2 audit hardening
 
-The ext2 direct-resize path enforces three storage barriers: after making the filesystem dirty, after completing data/allocation/inode mutation, and after restoring the clean superblock. Regression coverage injects failures at the first and second barriers and verifies that mutation cannot proceed before a durable dirty marker and that the clean marker is never written while mutation durability is uncertain.
+The ext2 direct-resize path now refuses a metadata-changing resize with `EXTFS_ERR_UNSUPPORTED` when the host supplies no durability barrier, before any filesystem write occurs. Once mutation begins it enforces three storage barriers: after making the filesystem dirty, after completing data/allocation/inode mutation, and after restoring the clean superblock. Regression coverage verifies the missing-flush zero-write refusal and injects failures at the first and second barriers to prove that mutation cannot proceed before a durable dirty marker and that the clean marker is never written while mutation durability is uncertain.
 
-0.9.2 also adds a qualification-only real-image mutator. CI builds disposable `mke2fs` ext2/ext3/ext4 images within the currently supported feature boundary, grows and shrinks an existing file through the real ExtFS metadata paths, closes/reopens the image, compares file bytes and requires a clean read-only `e2fsck` after each mutation.
+0.9.2 also adds a qualification-only real-image mutator. CI builds disposable `mke2fs` ext2/ext3/ext4 images within the supported mutation feature profile, grows and shrinks an existing file through the real ExtFS metadata paths, closes/reopens the image, compares file bytes and requires a clean read-only `e2fsck` after each mutation. The real-image qualification covers ordinary bounded grow/shrink. Fragmented ext4 allocation, inline-to-external promotion, external-leaf mutation/collapse and corruption/failure paths remain covered by synthetic checksum and failure-injection tests rather than being claimed as real-image-qualified.
 
-The Windows smoke-test script now has an explicit `-ExerciseResize` mode for disposable test volumes. It reversibly exercises append semantics, `FileEndOfFileInformation` growth/shrink, zero-fill of newly exposed bytes and byte-for-byte restoration of the original file.
+The Windows smoke-test script has an explicit `-ExerciseResize` mode for disposable test volumes. It reversibly exercises append semantics, `FileEndOfFileInformation` growth/shrink, zero-fill of newly exposed bytes and byte-for-byte restoration of the original file; cleanup attempts to restore the original EOF even when a probe fails.
 
-## Permanent CI gates
+## Automated qualification — 18 August 2026
 
-The 0.9.2 PR must pass both permanent workflows before release:
+The hardened branch has demonstrated both permanent qualification gates successfully during the 0.9.2 audit:
 
-- Portable ExtFS CI: GCC warnings-as-errors, unit tests, real ext2/ext3/ext4 image qualification, CMake/CTest, ASan+UBSan, Clang warnings-as-errors, GCC `-fanalyzer`, Clang static analyzer, shell/XML syntax and PowerShell parse checks.
-- Windows WDK CI: pinned WDK/SDK restore, Release x64 native driver build, Driver Code Analysis, InfVerif and Inf2Cat/package validation.
+- Portable ExtFS CI: PASS — GCC warnings-as-errors and unit tests; real ext2/ext3/ext4 grow/shrink/reopen/content/`e2fsck`; CMake/CTest; ASan+UBSan; Clang warnings-as-errors; GCC `-fanalyzer`; Clang static analyzer; shell/XML syntax; PowerShell parse checks.
+- Windows WDK CI: PASS — pinned WDK/SDK restore, native Release x64 WDK build, Driver Code Analysis, InfVerif and Inf2Cat/package validation using WDK 10.1.28000.2526 tooling.
 
-Final PASS results and any environment-qualified limitations are recorded here only after those workflows complete successfully. Runtime Driver Verifier and destructive Windows filesystem testing remain separate manual qualification steps on a disposable Windows VM/test volume.
+Release remains gated on both workflows passing again on the final 0.9.2 branch head and then on the identical squashed `main` tree. Runtime Driver Verifier and destructive mounted-volume Windows qualification remain separate manual steps on a disposable Windows VM/test volume and are not implied by these automated PASS results.
 
 ## Deliberate non-claims
 
