@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Test headless certificate trust staging
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/test-headless-root-store.yml
+
+permissions:
+  contents: read
+
+jobs:
+  x509store:
+    runs-on: windows-latest
+    timeout-minutes: 3
+    steps:
+      - name: Add, validate and remove a test root through .NET
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $testFile = Join-Path $env:RUNNER_TEMP 'extfs-signature-probe.ps1'
+          Set-Content -LiteralPath $testFile -Value "Write-Output 'ExtFS signature probe'" -Encoding UTF8
+
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+              -Subject 'CN=ExtFS Headless Trust Probe' `
+              -CertStoreLocation 'Cert:\CurrentUser\My' `
+              -KeyExportPolicy Exportable -KeyLength 2048 -HashAlgorithm SHA256 `
+              -NotAfter (Get-Date).AddDays(1)
+          $signed = Set-AuthenticodeSignature -LiteralPath $testFile -Certificate $cert -HashAlgorithm SHA256
+          if (-not $signed.SignerCertificate -or $signed.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+              throw 'The probe script was not signed by the expected certificate.'
+          }
+
+          $publicCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.RawData)
+          $root = [Security.Cryptography.X509Certificates.X509Store]::new(
+              [Security.Cryptography.X509Certificates.StoreName]::Root,
+              [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+          try {
+              $root.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              $root.Add($publicCert)
+          } finally {
+              $root.Close()
+          }
+
+          try {
+              $verified = Get-AuthenticodeSignature -LiteralPath $testFile
+              Write-Host "Signature status: $($verified.Status)"
+              if ($verified.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                  -not $verified.SignerCertificate -or
+                  $verified.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+                  throw "Headless CurrentUser Root staging did not produce a valid expected signature: $($verified.Status)"
+              }
+          } finally {
+              $root = [Security.Cryptography.X509Certificates.X509Store]::new(
+                  [Security.Cryptography.X509Certificates.StoreName]::Root,
+                  [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+              try {
+                  $root.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                  $matches = $root.Certificates.Find(
+                      [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                      $cert.Thumbprint,
+                      $false)
+                  foreach ($match in $matches) { $root.Remove($match) }
+              } finally {
+                  $root.Close()
+                  $publicCert.Dispose()
+              }
+              Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
+          }
+
+          Write-Host 'Headless X509Store trust staging passed.'
