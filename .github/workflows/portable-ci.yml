@@ -53,10 +53,20 @@ jobs:
         run: |
           clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
 
-      - name: Script and project syntax
-        shell: pwsh
+      - name: Shell and XML syntax
+        shell: bash
         run: |
           bash -n tests/integration.sh windows/build-cross-linux.sh
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse('windows/driver/extfs.vcxproj')
+          ET.parse('packages.config')
+          print('Shell and XML syntax checks passed')
+          PY
+
+      - name: PowerShell syntax
+        shell: pwsh
+        run: |
           $scripts = @(
             'windows/Build-And-Validate.ps1',
             'windows/Build-ExperimentalSetup.ps1',
@@ -70,9 +80,4 @@ jobs:
           foreach ($script in $scripts) {
             [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw))
           }
-          python3 - <<'PY'
-          import xml.etree.ElementTree as ET
-          ET.parse('windows/driver/extfs.vcxproj')
-          ET.parse('packages.config')
-          print('PowerShell and XML syntax checks passed')
-          PY
+          Write-Host 'PowerShell syntax checks passed'
