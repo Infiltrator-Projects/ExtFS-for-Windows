@@ -8,6 +8,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -98,31 +99,6 @@ static extfs_status resize_inode(extfs_volume *volume,
     }
 }
 
-static int reopen_and_verify(image_file *image,
-                             extfs_io *io,
-                             const char *path,
-                             extfs_u64 expected_size)
-{
-    extfs_volume volume;
-    extfs_inode inode;
-    void *scratch = NULL;
-    extfs_status status;
-    int result = 1;
-
-    if (fclose(image->stream) != 0) {
-        image->stream = NULL;
-        return 1;
-    }
-    image->stream = fopen(path == NULL ? "" : "", "rb");
-    (void)volume;
-    (void)inode;
-    (void)scratch;
-    (void)status;
-    (void)expected_size;
-    (void)io;
-    return result;
-}
-
 static void usage(FILE *stream)
 {
     fputs("Usage: extfs-mutate-test resize IMAGE PATH NEW_SIZE\n", stream);
@@ -177,7 +153,7 @@ int main(int argc, char **argv)
         goto Exit;
     }
     scratch_bytes = (extfs_u64)volume.block_size * 8U;
-    if (scratch_bytes > (extfs_u64)SIZE_MAX || scratch_bytes > 0xFFFFFFFFULL) {
+    if (scratch_bytes > (extfs_u64)(size_t)-1 || scratch_bytes > 0xFFFFFFFFULL) {
         fprintf(stderr, "extfs-mutate-test: scratch size is not representable\n");
         goto Exit;
     }
