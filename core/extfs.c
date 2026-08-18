@@ -1764,6 +1764,15 @@ extfs_status extfs_resize_file_ext2_direct(extfs_volume *volume,
     if (new_size == inode->size) {
         return EXTFS_OK;
     }
+
+    /* A metadata resize cannot safely begin unless the host can provide a
+     * durability barrier. Refuse this capability gap before even the dirty
+     * superblock is written; otherwise a caller lacking flush support would
+     * be left with an avoidable persistent dirty-state mutation. */
+    if (volume->io.flush == 0) {
+        return EXTFS_ERR_UNSUPPORTED;
+    }
+
     old_blocks = (extfs_u32)extfs_div_round_up_u64(inode->size,
                                                     volume->block_size);
     new_blocks = (extfs_u32)extfs_div_round_up_u64(new_size,

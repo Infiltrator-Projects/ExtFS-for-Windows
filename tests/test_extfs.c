@@ -897,6 +897,24 @@ int main(void)
         extfs_u8 *disk_bitmap;
         extfs_u8 *disk_descriptor;
 
+        {
+            extfs_io no_flush = io;
+            no_flush.flush = NULL;
+            prepare_ext2_direct_resize_image(&image);
+            failures += expect(extfs_open(&volume, &no_flush) == EXTFS_OK &&
+                               extfs_read_inode(&volume, 2U, &resized,
+                                                verify_scratch,
+                                                sizeof(verify_scratch)) == EXTFS_OK,
+                               "no-flush ext2 resize image opens read-only");
+            image.write_attempts = 0U;
+            failures += expect(extfs_resize_file_ext2_direct(
+                                   &volume, &resized, 500U, resize_scratch,
+                                   sizeof(resize_scratch)) == EXTFS_ERR_UNSUPPORTED &&
+                               image.write_attempts == 0U &&
+                               (image.bytes[1024U + 0x3AU] & 1U) != 0U,
+                               "ext2 resize refuses missing durability support before any write");
+        }
+
         prepare_ext2_direct_resize_image(&image);
         failures += expect(extfs_open(&volume, &io) == EXTFS_OK &&
                            extfs_read_inode(&volume, 2U, &resized,
