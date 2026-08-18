@@ -16,9 +16,10 @@
 | ext4 depth-1 extent-tree growth/truncate | Experimental | Exactly one external depth-0 leaf and one root index; dense initialized extents only |
 | ext4 inline-to-external promotion | Experimental | Full four-entry inline root can move to one newly allocated external leaf |
 | ext4 external-to-inline collapse | Experimental | Shrink collapses to inode root when four or fewer extents remain |
+| ext4 resize RO_COMPAT profile | Bounded | `sparse_super`, `large_file`, `btree_dir`, `extra_isize`, `metadata_csum`; `huge_file`, `dir_nlink` and other unlisted RO_COMPAT bits are refused for metadata resize |
 | ext4 metadata checksums | Mutation support | Bitmap, group descriptor, inode, primary superblock and external extent leaf rebuilt/verified |
 | ext4 extent-block checksum tail | Supported | Tail located from `eh_max`; not assumed to be final four bytes of block |
-| Real-image destructive resize qualification | CI coverage | Disposable mke2fs ext2/ext3/ext4 images; grow/shrink, reopen, content compare and `e2fsck` |
+| Real-image destructive resize qualification | CI coverage | Disposable `mke2fs` ext2/ext3/ext4 images inside the supported mutation profile; grow/shrink, reopen, content compare and `e2fsck` |
 | Multiple external leaves / depth > 1 | Refused | Split/merge/index propagation not implemented yet |
 | 64-bit/flex_bg ext4 allocation | Refused | 64-byte descriptors and broader placement/accounting not implemented |
 | Multi-group allocation per resize | Refused | One bitmap/descriptor pair per resize transaction |
