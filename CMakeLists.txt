@@ -9,8 +9,13 @@ target_compile_features(extfs PUBLIC c_std_11)
 add_executable(extfs-tool tools/extfs-tool.c)
 target_link_libraries(extfs-tool PRIVATE extfs)
 
-add_executable(extfs-mutate-test tests/mutate_image.c)
-target_link_libraries(extfs-mutate-test PRIVATE extfs)
+# The destructive image mutator is a qualification-only POSIX harness. Keep it
+# out of ordinary Windows CMake builds; the native Windows driver has its own
+# WDK project and qualification path.
+if(UNIX)
+    add_executable(extfs-mutate-test tests/mutate_image.c)
+    target_link_libraries(extfs-mutate-test PRIVATE extfs)
+endif()
 
 enable_testing()
 add_executable(test-extfs tests/test_extfs.c)
