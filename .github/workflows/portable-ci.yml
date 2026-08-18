@@ -54,12 +54,25 @@ jobs:
           clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
 
       - name: Script and project syntax
+        shell: pwsh
         run: |
           bash -n tests/integration.sh windows/build-cross-linux.sh
+          $scripts = @(
+            'windows/Build-And-Validate.ps1',
+            'windows/Build-ExperimentalSetup.ps1',
+            'windows/installer/Install-ExtFS.ps1',
+            'windows/installer/Uninstall-ExtFS.ps1',
+            'windows/test/Test-ExtFS.ps1',
+            'windows/test/Collect-Diagnostics.ps1',
+            'windows/test/Enable-DriverVerifier.ps1',
+            'windows/test/Disable-DriverVerifier.ps1'
+          )
+          foreach ($script in $scripts) {
+            [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw))
+          }
           python3 - <<'PY'
           import xml.etree.ElementTree as ET
           ET.parse('windows/driver/extfs.vcxproj')
-          ET.parse('windows/driver/extfs.sln') if False else None
           ET.parse('packages.config')
-          print('XML project/config parse passed')
+          print('PowerShell and XML syntax checks passed')
           PY
