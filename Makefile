@@ -11,7 +11,7 @@ BUILD = build
 
 .PHONY: all test integration clean
 
-all: $(BUILD)/libextfs.a $(BUILD)/extfs-tool $(BUILD)/test-extfs
+all: $(BUILD)/libextfs.a $(BUILD)/extfs-tool $(BUILD)/test-extfs $(BUILD)/extfs-mutate-test
 
 $(BUILD):
 	mkdir -p $(BUILD)
@@ -34,11 +34,17 @@ $(BUILD)/test-extfs.o: tests/test_extfs.c include/extfs/extfs.h | $(BUILD)
 $(BUILD)/test-extfs: $(BUILD)/test-extfs.o $(BUILD)/libextfs.a
 	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
 
+$(BUILD)/mutate_image.o: tests/mutate_image.c include/extfs/extfs.h | $(BUILD)
+	$(CC) $(CPPFLAGS) $(CFLAGS) $(WARNINGS) -std=c11 $(INCLUDES) -c $< -o $@
+
+$(BUILD)/extfs-mutate-test: $(BUILD)/mutate_image.o $(BUILD)/libextfs.a
+	$(CC) $(CFLAGS) $(LDFLAGS) $^ $(LDLIBS) -o $@
+
 test: all
 	$(BUILD)/test-extfs
 	$(MAKE) integration
 
-integration: $(BUILD)/extfs-tool
+integration: $(BUILD)/extfs-tool $(BUILD)/extfs-mutate-test
 	sh tests/integration.sh
 
 clean:
