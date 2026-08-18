@@ -4,7 +4,7 @@
 
 ExtFS remains an experimental kernel filesystem driver. A defect can crash Windows or corrupt a test filesystem. Use only backed-up/disposable media and a disposable test machine/VM until runtime qualification is complete.
 
-0.9.2 is the forensic-audit hardening checkpoint for the bounded 0.9 feature set. The ext2 direct-resize path now has explicit durability barriers: the dirty superblock is flushed before mutation, all mutation is flushed before the clean marker, and the clean marker is flushed before success is reported. Failure at a durability boundary leaves the mounted view dirty/fail-closed.
+0.9.2 is the forensic-audit hardening checkpoint for the bounded 0.9 feature set. The ext2 direct-resize path now requires a host durability barrier before any metadata-changing resize begins. If the host cannot flush writes to stable storage, the operation is refused before the dirty superblock or any other filesystem byte is written. Once mutation begins, the dirty superblock is flushed before mutation, all mutation is flushed before the clean marker, and the clean marker is flushed before success is reported. Failure at a durability boundary leaves the mounted view dirty/fail-closed.
 
 The bounded ext4 resizer still requires 32-byte group descriptors, `metadata_csum`, a supported clean internal JBD2 journal, and at most one allocation group change per resize. Bitmap/group/inode/superblock and external extent-leaf checksums are validated or rebuilt before journal commit. Newly allocated data is zeroed and flushed before growth metadata becomes durable.
 
