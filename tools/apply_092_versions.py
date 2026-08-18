@@ -24,3 +24,5 @@ replace('windows/installer/Install-ExtFS.ps1', '0.9.1', '0.9.2')
 replace('windows/installer/Install-ExtFS.ps1', 'Experimental native ext2/ext3/ext4 filesystem driver with journaled ext3 direct-file resize', 'Experimental native ext2/ext3/ext4 filesystem driver with bounded ext2/ext3/ext4 file resize', 1)
 replace('windows/installer/Uninstall-ExtFS.ps1', '0.9.1', '0.9.2')
 replace('windows/installer/extfs-installer.nsi', '0.9.1', '0.9.2')
+
+print('0.9.2 version metadata normalized')
