@@ -246,7 +246,7 @@ static int command_stream(const extfs_volume *volume,
 static void usage(FILE *stream)
 {
     fputs(
-        "ExtFS image inspector 0.3.0\n"
+        "ExtFS image inspector 0.9.2\n"
         "Usage:\n"
         "  extfs-tool info IMAGE\n"
         "  extfs-tool ls IMAGE [PATH]\n"

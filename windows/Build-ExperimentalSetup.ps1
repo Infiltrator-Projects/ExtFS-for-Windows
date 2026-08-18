@@ -59,7 +59,7 @@ if ($KeepExistingTestCertificate -and (Test-Path -LiteralPath $certificateFile))
 }
 if (-not $cert) {
     $cert = New-SelfSignedCertificate -Type CodeSigningCert `
-        -Subject 'CN=ExtFS 0.9.1 Experimental Test Signing' `
+        -Subject 'CN=ExtFS 0.9.2 Experimental Test Signing' `
         -CertStoreLocation 'Cert:\CurrentUser\My' `
         -KeyExportPolicy Exportable -KeyLength 3072 -HashAlgorithm SHA256 `
         -NotAfter (Get-Date).AddYears(2)
@@ -97,7 +97,7 @@ Push-Location (Split-Path -Parent $installerScript)
 try {
     & $makensis $installerScript
     if ($LASTEXITCODE -ne 0) { throw "NSIS failed with exit code $LASTEXITCODE." }
-    $setup = Join-Path (Get-Location) 'ExtFS-for-Windows-0.9.1-experimental-x64-setup.exe'
+    $setup = Join-Path (Get-Location) 'ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe'
     if (-not (Test-Path -LiteralPath $setup)) { throw 'NSIS did not produce the expected setup file.' }
     Copy-Item -LiteralPath $setup -Destination (Join-Path $root (Split-Path $setup -Leaf)) -Force
 } finally {
@@ -110,4 +110,4 @@ Write-Host ''
 Write-Host 'Experimental package completed.'
 Write-Host "Signed driver SHA-256: $hash"
 Write-Host "Signed catalog SHA-256: $catHash"
-Write-Host "Setup: $(Join-Path $root 'ExtFS-for-Windows-0.9.1-experimental-x64-setup.exe')"
+Write-Host "Setup: $(Join-Path $root 'ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe')"

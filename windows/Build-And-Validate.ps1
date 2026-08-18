@@ -109,21 +109,29 @@ function Find-MSBuild {
 }
 
 function Find-WindowsKitTool {
-    param([Parameter(Mandatory)][string]$Name)
+    param([Parameter(Mandatory)][string]$Name,
+          [string]$RestoredPackages)
     $command = Get-Command $Name -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
 
-    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'
-    if (-not (Test-Path -LiteralPath $kits)) {
-        throw "$Name was not found because the Windows 10/11 SDK/WDK tools directory is missing."
+    foreach ($root in @($RestoredPackages,
+                         (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'))) {
+        if (-not $root -or -not (Test-Path -LiteralPath $root)) { continue }
+        $candidates = @(Get-ChildItem -LiteralPath $root -Filter $Name -File -Recurse `
+            -ErrorAction SilentlyContinue | Sort-Object FullName -Descending)
+        if ($candidates.Count -eq 0) { continue }
+
+        # Prefer an x64-hosted utility when one exists. Some WDK package tools,
+        # notably Inf2Cat, are distributed only as an x86-hosted executable even
+        # when validating an x64 driver package; those tools are architecture-
+        # neutral with respect to the package they inspect.
+        $candidate = $candidates |
+            Where-Object FullName -Match '\\x64\\' |
+            Select-Object -First 1
+        if (-not $candidate) { $candidate = $candidates | Select-Object -First 1 }
+        if ($candidate) { return $candidate.FullName }
     }
-    $candidate = Get-ChildItem -LiteralPath $kits -Filter $Name -File -Recurse `
-        -ErrorAction SilentlyContinue |
-        Where-Object FullName -Match '\\x64\\' |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if (-not $candidate) { throw "$Name was not found in the installed Windows Kits." }
-    return $candidate.FullName
+    throw "$Name was not found in the restored WDK/SDK packages or installed Windows Kits."
 }
 
 $nuget = Find-NuGet
@@ -145,8 +153,8 @@ Enter-VisualStudioDeveloperShell
 Add-WdkBuildToolsToPath -RestoredPackages $packagesDir -Version $wdkNuGetVersion
 
 $msbuild = Find-MSBuild
-$infverif = Find-WindowsKitTool -Name 'InfVerif.exe'
-$inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe'
+$infverif = Find-WindowsKitTool -Name 'InfVerif.exe' -RestoredPackages $packagesDir
+$inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe' -RestoredPackages $packagesDir
 
 Write-Host "WDK NuGet props: $wdkProps"
 Write-Host "Building ExtFS $Configuration x64 with: $msbuild"

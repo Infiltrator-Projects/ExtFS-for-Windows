@@ -5,7 +5,10 @@ param(
     [ValidatePattern('^[A-Za-z]:?$')]
     [string]$DriveLetter,
     [string]$KnownFile,
-    [switch]$ExerciseInPlaceWrite
+    [switch]$ExerciseInPlaceWrite,
+    [switch]$ExerciseResize,
+    [ValidateRange(1, 1048576)]
+    [int]$ResizeDeltaBytes = 1024
 )
 
 $ErrorActionPreference = 'Stop'
@@ -22,6 +25,11 @@ $results = [ordered]@{
     CopyOut = $false
     InPlaceWrite = $null
     InPlaceWriteRestored = $null
+    AppendRoundTrip = $null
+    ResizeRoundTrip = $null
+    OriginalLength = $null
+    FinalLength = $null
+    ContentRestored = $null
     WriteFileRefused = $false
     CreateDirectoryRefused = $false
     StillReadableAfterWriteProbes = $false
@@ -45,7 +53,11 @@ if ($KnownFile) {
     $file = $entries | Where-Object { -not $_.PSIsContainer } | Select-Object -First 1
 }
 
+$originalHash = $null
 if ($file) {
+    $results.OriginalLength = [Int64]$file.Length
+    $originalHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+
     $stream = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
         [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
     try {
@@ -70,10 +82,12 @@ if ($file) {
         if ($file.Length -lt 8) { throw 'Known file must be at least 8 bytes for the in-place write test.' }
         $rw = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
             [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+        $original = New-Object byte[] 8
+        $haveOriginal = $false
         try {
-            $original = New-Object byte[] 8
             if ($rw.Read($original, 0, 8) -ne 8) { throw 'Could not read write-test prefix.' }
-            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS060')
+            $haveOriginal = $true
+            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS092')
             $rw.Position = 0
             $rw.Write($marker, 0, $marker.Length)
             $rw.Flush()
@@ -84,24 +98,123 @@ if ($file) {
                 throw 'In-place write verification failed.'
             }
             $results.InPlaceWrite = $true
-            $rw.Position = 0
-            $rw.Write($original, 0, $original.Length)
-            $rw.Flush()
-            $rw.Position = 0
-            $restored = New-Object byte[] 8
-            if ($rw.Read($restored, 0, 8) -ne 8 -or
-                [Convert]::ToBase64String($original) -ne [Convert]::ToBase64String($restored)) {
-                throw 'Original bytes were not restored after the write test.'
-            }
-            $results.InPlaceWriteRestored = $true
         } finally {
+            if ($haveOriginal) {
+                $rw.Position = 0
+                $rw.Write($original, 0, $original.Length)
+                $rw.Flush()
+                $rw.Position = 0
+                $restored = New-Object byte[] 8
+                if ($rw.Read($restored, 0, 8) -ne 8 -or
+                    [Convert]::ToBase64String($original) -ne [Convert]::ToBase64String($restored)) {
+                    $results.InPlaceWriteRestored = $false
+                    $rw.Dispose()
+                    throw 'Original bytes were not restored after the write test.'
+                }
+                $results.InPlaceWriteRestored = $true
+            }
             $rw.Dispose()
         }
     }
+
+    if ($ExerciseResize) {
+        $originalLength = [Int64]$file.Length
+        if ($originalLength -gt [Int64]::MaxValue - $ResizeDeltaBytes - 8) {
+            throw 'Known file is too large for the reversible resize qualification probe.'
+        }
+
+        try {
+            # FileMode.Append requests append semantics from Windows. The marker
+            # is verified at the new EOF and then removed by restoring old EOF.
+            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS092')
+            $append = [IO.File]::Open($file.FullName, [IO.FileMode]::Append,
+                [IO.FileAccess]::Write, [IO.FileShare]::Read)
+            try {
+                $append.Write($marker, 0, $marker.Length)
+                $append.Flush()
+            } finally {
+                $append.Dispose()
+            }
+
+            $verifyAppend = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            try {
+                if ($verifyAppend.Length -ne $originalLength + $marker.Length) {
+                    throw 'Append qualification produced the wrong EOF.'
+                }
+                $verifyAppend.Position = $originalLength
+                $tail = New-Object byte[] $marker.Length
+                if ($verifyAppend.Read($tail, 0, $tail.Length) -ne $tail.Length -or
+                    [Convert]::ToBase64String($tail) -ne [Convert]::ToBase64String($marker)) {
+                    throw 'Append qualification marker could not be read back.'
+                }
+                $verifyAppend.SetLength($originalLength)
+                $verifyAppend.Flush()
+            } finally {
+                $verifyAppend.Dispose()
+            }
+            $results.AppendRoundTrip = $true
+
+            # Exercise FileEndOfFileInformation growth and shrink without
+            # changing existing bytes. Newly exposed bytes must read as zero.
+            $rw = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
+                [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            try {
+                $grownLength = $originalLength + $ResizeDeltaBytes
+                $rw.SetLength($grownLength)
+                $rw.Flush()
+                if ($rw.Length -ne $grownLength) { throw 'EOF growth did not persist.' }
+                $rw.Position = $originalLength
+                $zeroProbe = New-Object byte[] $ResizeDeltaBytes
+                if ($rw.Read($zeroProbe, 0, $zeroProbe.Length) -ne $zeroProbe.Length) {
+                    throw 'Could not read the newly exposed growth range.'
+                }
+                foreach ($b in $zeroProbe) {
+                    if ($b -ne 0) { throw 'Newly exposed EOF growth bytes were not zero-filled.' }
+                }
+                $rw.SetLength($originalLength)
+                $rw.Flush()
+                if ($rw.Length -ne $originalLength) { throw 'EOF shrink did not restore the original length.' }
+            } finally {
+                $rw.Dispose()
+            }
+            $results.ResizeRoundTrip = $true
+        } finally {
+            # If an assertion or I/O failure occurs after append/growth, make a
+            # best-effort attempt to restore the original EOF. A cleanup error
+            # must not hide the original qualification failure; if the probe
+            # otherwise succeeds, the final length/hash check below still makes
+            # incomplete restoration fatal.
+            try {
+                $restore = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
+                    [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+                try {
+                    if ($restore.Length -ne $originalLength) {
+                        $restore.SetLength($originalLength)
+                        $restore.Flush()
+                    }
+                } finally {
+                    $restore.Dispose()
+                }
+            } catch {
+                Write-Warning "Could not restore the original EOF after the resize probe: $_"
+            }
+        }
+    }
+
+    $finalFile = Get-Item -LiteralPath $file.FullName -Force -ErrorAction Stop
+    $results.FinalLength = [Int64]$finalFile.Length
+    if ($ExerciseInPlaceWrite -or $ExerciseResize) {
+        $finalHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file.FullName).Hash
+        if ($finalFile.Length -ne $results.OriginalLength -or $finalHash -ne $originalHash) {
+            throw 'Qualification probes did not restore the known file byte-for-byte.'
+        }
+        $results.ContentRestored = $true
+    }
 }
 
-if ($ExerciseInPlaceWrite -and -not $file) {
-    throw '-ExerciseInPlaceWrite requires -KnownFile or a root-level regular file.'
+if (($ExerciseInPlaceWrite -or $ExerciseResize) -and -not $file) {
+    throw 'Write/resize qualification requires -KnownFile or a root-level regular file.'
 }
 
 $probeFile = Join-Path $root '__extfs_write_probe.tmp'
@@ -131,6 +244,6 @@ $report = Join-Path $env:TEMP "ExtFS-qualification-$drive-$([DateTime]::Now.ToSt
 $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $report -Encoding UTF8
 
 Write-Host ''
-Write-Host 'ExtFS 0.9.1 smoke test passed.'
+Write-Host 'ExtFS 0.9.2 qualification probe passed.'
 Write-Host "Report: $report"
 $results | Format-List | Out-Host

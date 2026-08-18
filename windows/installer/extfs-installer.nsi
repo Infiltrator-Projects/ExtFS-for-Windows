@@ -7,16 +7,16 @@ ManifestSupportedOS all
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
-Name "ExtFS for Windows 0.9.1 Experimental"
-OutFile "ExtFS-for-Windows-0.9.1-experimental-x64-setup.exe"
+Name "ExtFS for Windows 0.9.2 Experimental"
+OutFile "ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe"
 InstallDir "$PROGRAMFILES64\ExtFS"
 BrandingText "ExtFS Project"
 
-VIProductVersion "0.9.1.0"
+VIProductVersion "0.9.2.0"
 VIAddVersionKey "ProductName" "ExtFS for Windows"
 VIAddVersionKey "CompanyName" "Shannon Smith"
 VIAddVersionKey "FileDescription" "ExtFS experimental x64 setup"
-VIAddVersionKey "FileVersion" "0.9.1.0"
+VIAddVersionKey "FileVersion" "0.9.2.0"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 
 !define MUI_ABORTWARNING
@@ -36,7 +36,7 @@ Function .onInit
         Abort
     ${EndIf}
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-        "ExtFS 0.9.1 is an unvalidated kernel-driver checkpoint. Use it only in a disposable Windows VM with a backed-up test volume. It supports same-size data overwrites on eligible ext2/ext3/ext4 volumes, direct-block growth/truncation on ext2, bounded journaled direct-file growth/truncation on clean eligible ext3 volumes, and checksum-aware ext4 resize using either the inline root or one external leaf behind a depth-1 root. Deeper or multi-leaf extent-tree mutation, 64-bit/flex_bg allocation, create/delete/rename and dirty-journal replay remain refused. A driver defect can still crash Windows.$\r$\n$\r$\nContinue?" \
+        "ExtFS 0.9.2 is an unvalidated kernel-driver checkpoint. Use it only in a disposable Windows VM with a backed-up test volume. It supports same-size data overwrites on eligible ext2/ext3/ext4 volumes, direct-block growth/truncation on ext2, bounded journaled direct-file growth/truncation on clean eligible ext3 volumes, and checksum-aware ext4 resize using either the inline root or one external leaf behind a depth-1 root. Deeper or multi-leaf extent-tree mutation, 64-bit/flex_bg allocation, create/delete/rename and dirty-journal replay remain refused. A driver defect can still crash Windows.$\r$\n$\r$\nContinue?" \
         IDOK continue
     Abort
 continue:
@@ -73,13 +73,13 @@ Section "Install ExtFS" SecMain
     ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayName" "ExtFS for Windows 0.9.1 Experimental"
+        "DisplayName" "ExtFS for Windows 0.9.2 Experimental"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "UninstallString" '"$INSTDIR\Uninstall-ExtFS.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "Publisher" "Shannon Smith"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayVersion" "0.9.1"
+        "DisplayVersion" "0.9.2"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \

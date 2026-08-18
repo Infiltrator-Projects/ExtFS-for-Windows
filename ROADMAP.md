@@ -43,17 +43,16 @@
 - Fragmented EOF append within the inode-resident extent root. **Implemented.**
 - Portable verification completed; Windows qualification skipped before development continued.
 
-## 0.9 — bounded external extent tree
+## 0.9 — bounded external extent tree and audit hardening
 
-- 0.9.1 licensing maintenance: project relicensed to GPL-3.0-or-later and SPDX
-  identifiers standardised across source/build/documentation. **Implemented.**
-- No intentional filesystem-behaviour change from the 0.9.0 functional checkpoint.
-
+- 0.9.1 GPL-3.0-or-later/SPDX standardisation checkpoint. **Released.**
 - Promote a full inline root to one external depth-0 leaf behind a depth-1 inode index. **Implemented.**
 - Append/merge initialized extents within that single leaf and collapse back to inline on shrink. **Implemented.**
 - Validate/rebuild external extent-block checksum tails using `eh_max`. **Implemented.**
 - Account for allocation/free of the extent metadata block in bitmap/counters/`i_blocks`. **Implemented.**
-- Windows WDK + Code Analysis qualification. **Pending.**
+- 0.9.2 ext2 crash-consistency barriers: dirty marker flush, mutation flush, clean-marker flush. **Implemented.**
+- 0.9.2 destructive real-image ext2/ext3/ext4 grow/shrink qualification followed by reopen and `e2fsck`. **Implemented in CI; qualification result recorded in `VERIFICATION.md`.**
+- 0.9.2 Windows WDK + Code Analysis CI path. **Implemented; qualification result recorded in `VERIFICATION.md`.**
 
 ## 0.10 — general ext4 extent allocation
 
@@ -75,6 +74,4 @@
 
 ## Later — system-volume research
 
-NT security descriptors, ADS/reparse mapping, boot-start/WinPE/Setup and an
-ext-aware bootstrap come only after the data filesystem is independently
-crash-safe.
+NT security descriptors, ADS/reparse mapping, boot-start/WinPE/Setup and an ext-aware bootstrap come only after the data filesystem is independently crash-safe.

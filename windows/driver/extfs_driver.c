@@ -2,11 +2,12 @@
 #include "extfs_driver.h"
 
 /*
- * ExtFS 0.3 is a deliberately small, synchronous IFS.  It keeps every ext
- * on-disk decision in ext-core; this file translates Windows IRPs, names and
- * information records.  The first write path is intentionally narrow: it can
- * overwrite already-allocated regular-file data without changing file size,
- * block allocation, directory metadata or journal state.
+ * ExtFS 0.9.2 is a deliberately conservative synchronous native IFS.  All ext
+ * on-disk decisions remain in the portable core; this file translates Windows
+ * IRPs, names, synchronization and information records.  Supported writes are
+ * bounded to existing-file data overwrite plus the filesystem-specific ext2,
+ * ext3 and ext4 resize paths.  Namespace mutation and paging writes remain
+ * fail-closed until their later qualification checkpoints.
  */
 
 typedef struct _EXTFS_OUTPUT_BUFFER {

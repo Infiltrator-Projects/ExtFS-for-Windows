@@ -4,7 +4,7 @@ Signature   = "$WINDOWS NT$"
 Class       = System
 ClassGuid   = {4D36E97D-E325-11CE-BFC1-08002BE10318}
 Provider    = %ProviderName%
-DriverVer   = 08/12/2026,0.9.1.0
+DriverVer   = 08/18/2026,0.9.2.0
 CatalogFile = extfs.cat
 PnpLockdown = 1
 
@@ -40,4 +40,4 @@ LoadOrderGroup = "File System"
 ProviderName       = "Shannon Smith"
 DiskName           = "ExtFS for Windows installation media"
 ServiceName        = "ExtFS"
-ServiceDescription = "Experimental native ext2/ext3/ext4 filesystem driver with journaled ext3 direct-file resize"
+ServiceDescription = "Experimental native ext2/ext3/ext4 filesystem driver with bounded ext2/ext3/ext4 file resize"
