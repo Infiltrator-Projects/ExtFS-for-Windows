@@ -14,7 +14,7 @@ The ext2 direct-resize path now refuses a metadata-changing resize with `EXTFS_E
 
 0.9.2 also adds a qualification-only real-image mutator. CI builds disposable `mke2fs` ext2/ext3/ext4 images within the supported mutation feature profile, grows and shrinks an existing file through the real ExtFS metadata paths, closes/reopens the image, compares file bytes and requires a clean read-only `e2fsck` after each mutation. The real-image qualification covers ordinary bounded grow/shrink. Fragmented ext4 allocation, inline-to-external promotion, external-leaf mutation/collapse and corruption/failure paths remain covered by synthetic checksum and failure-injection tests rather than being claimed as real-image-qualified.
 
-The Windows smoke-test script has an explicit `-ExerciseResize` mode for disposable test volumes. It reversibly exercises append semantics, `FileEndOfFileInformation` growth/shrink, zero-fill of newly exposed bytes and byte-for-byte restoration of the original file; cleanup attempts to restore the original EOF even when a probe fails.
+The Windows smoke-test script has an explicit `-ExerciseResize` mode for disposable test volumes. It reversibly exercises append semantics, `FileEndOfFileInformation` growth/shrink, zero-fill of newly exposed bytes and byte-for-byte restoration of the original file. Cleanup makes a best-effort original-EOF restoration after failures without allowing a cleanup exception to hide the primary qualification error; an otherwise successful probe still requires the final length and SHA-256 to match the original file.
 
 ## Automated qualification — 18 August 2026
 
