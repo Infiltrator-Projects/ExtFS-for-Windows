@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Apply 0.9.2 audit patches
+
+on:
+  push:
+    branches:
+      - hardening/v0.9.2
+    paths:
+      - tools/apply_092_large_patches.py
+      - .github/workflows/apply-092-patches.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hardening/v0.9.2
+      - name: Apply targeted large-file patches
+        run: python3 tools/apply_092_large_patches.py
+      - name: Validate patched source still builds
+        run: |
+          make clean
+          make all
+          ./build/test-extfs
+      - name: Commit intended patches and remove helper
+        run: |
+          rm tools/apply_092_large_patches.py
+          rm .github/workflows/apply-092-patches.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add windows/driver/extfs_driver.c windows/Build-And-Validate.ps1 tools/apply_092_large_patches.py .github/workflows/apply-092-patches.yml
+          git commit -m "Refresh 0.9.2 Windows audit metadata"
+          git push origin HEAD:hardening/v0.9.2
