@@ -181,18 +181,23 @@ if ($file) {
             $results.ResizeRoundTrip = $true
         } finally {
             # If an assertion or I/O failure occurs after append/growth, make a
-            # best-effort attempt to restore the original EOF before surfacing
-            # the qualification failure. The volume is still disposable by
-            # policy because a filesystem defect can make restoration fail.
-            $restore = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
-                [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+            # best-effort attempt to restore the original EOF. A cleanup error
+            # must not hide the original qualification failure; if the probe
+            # otherwise succeeds, the final length/hash check below still makes
+            # incomplete restoration fatal.
             try {
-                if ($restore.Length -ne $originalLength) {
-                    $restore.SetLength($originalLength)
-                    $restore.Flush()
+                $restore = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
+                    [IO.FileAccess]::ReadWrite, [IO.FileShare]::Read)
+                try {
+                    if ($restore.Length -ne $originalLength) {
+                        $restore.SetLength($originalLength)
+                        $restore.Flush()
+                    }
+                } finally {
+                    $restore.Dispose()
                 }
-            } finally {
-                $restore.Dispose()
+            } catch {
+                Write-Warning "Could not restore the original EOF after the resize probe: $_"
             }
         }
     }
