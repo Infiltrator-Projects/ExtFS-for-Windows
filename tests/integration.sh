@@ -57,8 +57,9 @@ for filesystem in ext2 ext3 ext4; do
 done
 
 # Run actual ExtFS metadata mutation against real mke2fs images. The ext4 image
-# explicitly disables modern allocation/recovery features outside the bounded
-# 0.9 mutation profile; refusing those features is part of the safety design.
+# explicitly disables modern allocation/recovery/accounting features outside
+# the bounded 0.9 mutation gate. Refusing those features is part of the safety
+# design; the qualification fixture must not weaken the production gate.
 for filesystem in ext2 ext3 ext4; do
     image="$test_dir/$filesystem-mutation.img"
     expected_growth="$test_dir/$filesystem-expected-growth.bin"
@@ -78,7 +79,7 @@ for filesystem in ext2 ext3 ext4; do
             ;;
         ext4)
             mke2fs -q -F -t ext4 -b 1024 \
-                -O metadata_csum,^64bit,^flex_bg,^fast_commit,^orphan_file \
+                -O metadata_csum,^64bit,^flex_bg,^fast_commit,^orphan_file,^huge_file,^dir_nlink \
                 -E lazy_itable_init=0,lazy_journal_init=0 \
                 -L EXTFS-MUT-EXT4 -d "$mutation_stage" "$image"
             ;;
