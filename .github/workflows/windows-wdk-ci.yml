@@ -23,8 +23,12 @@ jobs:
           $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
           if (-not $nuget) {
               choco install nuget.commandline -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
+              $nuget = Get-Command nuget.exe -ErrorAction Stop
           }
-          nuget help | Select-Object -First 1
+          Write-Host "NuGet: $($nuget.Source)"
+          & $nuget.Source locals all -list | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "NuGet self-check failed with exit code $LASTEXITCODE." }
 
       - name: WDK Release build and package validation
         shell: powershell
