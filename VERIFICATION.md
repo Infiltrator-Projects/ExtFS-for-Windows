@@ -50,3 +50,12 @@ The optional `mke2fs` integration harness was not run because `mke2fs` is not
 available in the source-production environment.
 
 0.9.1 still requires its own Windows WDK and Driver Code Analysis qualification.
+
+## Post-0.9.1 forensic audit hardening
+
+The ext2 direct-resize path now enforces three storage barriers: after making the
+filesystem dirty, after completing data/allocation/inode mutation, and after
+restoring the clean superblock. Regression coverage injects failures at the
+first and second barriers and verifies that mutation cannot proceed before a
+durable dirty marker and that the clean marker is never written while mutation
+durability is uncertain.

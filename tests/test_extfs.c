@@ -912,6 +912,8 @@ int main(void)
                            image.bytes[8U * 1024U + 499U] == 0U &&
                            image.bytes[8U * 1024U + 500U] == (extfs_u8)'Q',
                            "same-block growth zeros only newly exposed bytes");
+        failures += expect(image.flush_attempts == 3U,
+                           "successful ext2 resize uses dirty, commit and clean durability barriers");
 
         prepare_ext2_direct_resize_image(&image);
         failures += expect(extfs_open(&volume, &io) == EXTFS_OK,
@@ -976,7 +978,40 @@ int main(void)
                            extfs_read_inode(&volume, 2U, &resized,
                                             verify_scratch,
                                             sizeof(verify_scratch)) == EXTFS_OK,
-                           "failure-injection resize image opens");
+                           "dirty-barrier failure-injection image opens");
+        image.fail_flush_number = 1U;
+        failures += expect(extfs_resize_file_ext2_direct(
+                               &volume, &resized, 2500U, resize_scratch,
+                               sizeof(resize_scratch)) == EXTFS_ERR_IO,
+                           "ext2 resize stops when the dirty marker cannot be made durable");
+        failures += expect(image.write_attempts == 1U &&
+                           (volume.state & 1U) == 0U &&
+                           (image.bytes[1024U + 0x3AU] & 1U) == 0U,
+                           "dirty-barrier failure occurs before any allocation or inode mutation");
+
+        prepare_ext2_direct_resize_image(&image);
+        failures += expect(extfs_open(&volume, &io) == EXTFS_OK &&
+                           extfs_read_inode(&volume, 2U, &resized,
+                                            verify_scratch,
+                                            sizeof(verify_scratch)) == EXTFS_OK,
+                           "pre-clean barrier failure-injection image opens");
+        image.fail_flush_number = 2U;
+        failures += expect(extfs_resize_file_ext2_direct(
+                               &volume, &resized, 2500U, resize_scratch,
+                               sizeof(resize_scratch)) == EXTFS_ERR_IO &&
+                           (volume.state & 1U) == 0U &&
+                           (image.bytes[1024U + 0x3AU] & 1U) == 0U,
+                           "ext2 resize never writes the clean marker when mutation durability is uncertain");
+        failures += expect(extfs_write_assess(&volume, &write_risks) ==
+                               EXTFS_ERR_UNSUPPORTED,
+                           "pre-clean flush failure leaves the mounted volume fail-closed");
+
+        prepare_ext2_direct_resize_image(&image);
+        failures += expect(extfs_open(&volume, &io) == EXTFS_OK &&
+                           extfs_read_inode(&volume, 2U, &resized,
+                                            verify_scratch,
+                                            sizeof(verify_scratch)) == EXTFS_OK,
+                           "metadata-write failure-injection resize image opens");
         image.fail_write_number = 2U;
         failures += expect(extfs_resize_file_ext2_direct(
                                &volume, &resized, 2500U, resize_scratch,

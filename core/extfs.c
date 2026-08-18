@@ -1891,6 +1891,14 @@ extfs_status extfs_resize_file_ext2_direct(extfs_volume *volume,
     if (status != EXTFS_OK) return status;
     volume->state = dirty_state;
 
+    /* The dirty marker is the ext2 crash-consistency fence.  It must reach
+     * stable storage before any allocation, inode or data mutation can become
+     * durable; otherwise a controller may reorder later metadata ahead of the
+     * dirty superblock and a crash can leave a partially changed filesystem
+     * appearing clean. */
+    status = extfs_flush(volume);
+    if (status != EXTFS_OK) return status;
+
     if (new_blocks > old_blocks) {
         extfs_u32 pass;
         extfs_u32 needed = new_blocks - old_blocks;
@@ -2127,11 +2135,27 @@ extfs_status extfs_resize_file_ext2_direct(extfs_volume *volume,
         volume->free_blocks = new_free_blocks;
     }
 
-    /* Restore the clean state only after all data/allocation/inode metadata has
-     * reached the host writer.  Failure here intentionally leaves the opened
-     * volume dirty in memory, preventing further writes. */
+    /* All ext2 mutation must be durable before the clean marker is allowed to
+     * reach stable storage.  This second barrier pairs with the dirty-marker
+     * barrier above and prevents write-cache reordering from advertising a
+     * partially committed resize as clean after a crash. */
+    status = extfs_flush(volume);
+    if (status != EXTFS_OK) {
+        volume->state = dirty_state;
+        return status;
+    }
+
     status = extfs_ext2_write_superblock(volume, work, original_state,
                                          volume->free_blocks);
+    if (status != EXTFS_OK) {
+        volume->state = dirty_state;
+        return status;
+    }
+
+    /* Make the clean transition durable before reporting success.  If this
+     * final flush fails, all preceding filesystem mutation is already durable;
+     * keep the in-memory volume dirty and fail closed for the rest of the mount. */
+    status = extfs_flush(volume);
     if (status != EXTFS_OK) {
         volume->state = dirty_state;
         return status;

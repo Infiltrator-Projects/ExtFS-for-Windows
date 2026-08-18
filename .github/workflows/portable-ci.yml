@@ -1,0 +1,29 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Portable ExtFS CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: GCC warnings-as-errors and unit tests
+        run: |
+          make clean
+          make all
+          ./build/test-extfs
+      - name: CMake and CTest
+        run: |
+          cmake -S . -B build-cmake
+          cmake --build build-cmake
+          ctest --test-dir build-cmake --output-on-failure
+      - name: Optional real-image integration harness
+        run: make integration

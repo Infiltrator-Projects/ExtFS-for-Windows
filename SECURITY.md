@@ -8,7 +8,10 @@ disposable test machine/VM until runtime qualification is complete.
 
 0.9.1 is a licensing-only maintenance checkpoint and intentionally keeps the
 0.9.0 fail-closed filesystem behaviour, including the bounded external ext4
-extent leaf. It still requires 32-byte group descriptors, `metadata_csum`,
+extent leaf. The post-0.9.1 audit hardening adds explicit ext2 durability
+barriers: the dirty superblock is flushed before mutation, all mutation is
+flushed before the clean marker, and the clean marker is flushed before success
+is reported. It still requires 32-byte group descriptors, `metadata_csum`,
 a supported clean internal JBD2 journal, and at most one allocation group change
 per resize. Bitmap/group/inode/superblock and external extent-leaf checksums are
 validated or rebuilt before journal commit. Newly allocated data is zeroed and
