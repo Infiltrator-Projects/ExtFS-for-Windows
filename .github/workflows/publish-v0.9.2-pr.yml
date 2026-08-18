@@ -23,8 +23,7 @@ jobs:
           ref: main
       - name: Verify exact release source
         shell: bash
-        run: |
-          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN_SHA"
+        run: test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN_SHA"
       - name: Re-run unit and real-image qualification
         shell: bash
         run: |
@@ -49,10 +48,9 @@ jobs:
         shell: powershell
         run: |
           $head = (git rev-parse HEAD).Trim()
-          if ($head -ne $env:EXPECTED_MAIN_SHA) {
-              throw "Expected main $env:EXPECTED_MAIN_SHA but checked out $head."
-          }
-      - name: Ensure NuGet and full WDK validation tools
+          if ($head -ne $env:EXPECTED_MAIN_SHA) { throw "Expected main $env:EXPECTED_MAIN_SHA but checked out $head." }
+
+      - name: Ensure NuGet, WDK tools and NSIS
         shell: powershell
         run: |
           $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
@@ -66,29 +64,88 @@ jobs:
               & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
               if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." }
           }
-          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $inf2cat) { throw 'Inf2Cat.exe is unavailable after WDK provisioning.' }
-          Write-Host "Inf2Cat: $($inf2cat.FullName)"
-      - name: Ensure NSIS
-        shell: powershell
-        run: |
-          $makensis = @(
-              (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
-              (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe')
-          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not (Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1)) {
+              throw 'Inf2Cat.exe is unavailable after WDK provisioning.'
+          }
+          $makensis = @((Join-Path $env:ProgramFiles 'NSIS\makensis.exe'), (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
           if (-not $makensis) {
               choco install nsis -y --no-progress
               if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed with exit code $LASTEXITCODE." }
           }
-      - name: Build, analyze, validate, test-sign and package
+
+      - name: Build, analyze and validate driver package
+        shell: powershell
+        timeout-minutes: 15
+        run: .\windows\Build-And-Validate.ps1 -Configuration Release
+
+      - name: Create test certificate and sign SYS/CAT
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          $release = Join-Path $PWD 'release\driver'
+          $driver = Join-Path $release 'extfs.sys'
+          $catalog = Join-Path $release 'extfs.cat'
+          $certificateFile = Join-Path $release 'extfs-test.cer'
+          foreach ($required in @($driver, $catalog)) {
+              if (-not (Test-Path -LiteralPath $required)) { throw "Missing validated package file: $required" }
+          }
+
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter signtool.exe -File -Recurse -ErrorAction SilentlyContinue |
+              Sort-Object @{Expression={ if ($_.FullName -match '\\x64\\') { 0 } else { 1 } }}, FullName |
+              Select-Object -First 1
+          if (-not $signtool) { throw 'signtool.exe was not found in Windows Kits.' }
+
+          $cert = New-SelfSignedCertificate -Type CodeSigningCert `
+              -Subject 'CN=ExtFS 0.9.2 Experimental Test Signing' `
+              -CertStoreLocation 'Cert:\CurrentUser\My' `
+              -KeyExportPolicy Exportable -KeyLength 3072 -HashAlgorithm SHA256 `
+              -NotAfter (Get-Date).AddYears(2)
+          Export-Certificate -Cert $cert -FilePath $certificateFile -Force | Out-Null
+
+          foreach ($file in @($driver, $catalog)) {
+              & $signtool.FullName sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $file
+              if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
+          }
+
+          $temporaryRoot = $null
+          try {
+              $temporaryRoot = Import-Certificate -FilePath $certificateFile -CertStoreLocation 'Cert:\CurrentUser\Root'
+              foreach ($file in @($driver, $catalog)) {
+                  & $signtool.FullName verify /v /pa $file
+                  if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $file with exit code $LASTEXITCODE." }
+              }
+          } finally {
+              if ($temporaryRoot) {
+                  Get-ChildItem Cert:\CurrentUser\Root | Where-Object Thumbprint -eq $cert.Thumbprint | Remove-Item -Force -ErrorAction SilentlyContinue
+              }
+          }
+
+      - name: Build NSIS installer
+        shell: powershell
+        timeout-minutes: 5
+        run: |
+          $makensis = @((Join-Path $env:ProgramFiles 'NSIS\makensis.exe'), (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe')) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $makensis) { throw 'makensis.exe is unavailable.' }
+          $installerDir = Join-Path $PWD 'windows\installer'
+          Push-Location $installerDir
+          try {
+              & $makensis 'extfs-installer.nsi'
+              if ($LASTEXITCODE -ne 0) { throw "NSIS failed with exit code $LASTEXITCODE." }
+              $built = Join-Path $installerDir 'ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe'
+              if (-not (Test-Path -LiteralPath $built)) { throw 'Expected 0.9.2 setup executable was not produced.' }
+              Copy-Item -LiteralPath $built -Destination (Join-Path $env:GITHUB_WORKSPACE 'ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe') -Force
+          } finally {
+              Pop-Location
+          }
+
+      - name: Hash release installer
         shell: powershell
         run: |
-          .\windows\Build-ExperimentalSetup.ps1
           $setup = Join-Path $PWD 'ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe'
-          if (-not (Test-Path -LiteralPath $setup)) { throw 'Expected 0.9.2 setup executable was not produced.' }
           $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
           "$hash  ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe" | Set-Content -LiteralPath (Join-Path $PWD 'SHA256SUMS.txt') -Encoding ASCII
           Write-Host "Installer SHA-256: $hash"
+
       - uses: actions/upload-artifact@v4
         with:
           name: extfs-0.9.2-release-pr
@@ -98,9 +155,7 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs:
-      - verify-main
-      - package-main
+    needs: [verify-main, package-main]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -127,18 +182,12 @@ jobs:
 
           Release assets intentionally contain only the experimental x64 setup executable and its SHA-256 checksum. GitHub supplies the canonical source archives for the tag automatically; no duplicate source ZIP or patch asset is published.
           EOF
-
           if gh release view v0.9.2 >/dev/null 2>&1; then
             git fetch origin refs/tags/v0.9.2:refs/tags/v0.9.2 --force
             test "$(git rev-list -n 1 v0.9.2)" = "$EXPECTED_MAIN_SHA"
             echo 'Existing v0.9.2 release targets the expected main commit.'
           else
-            gh release create v0.9.2 \
-              release-assets/ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe \
-              release-assets/SHA256SUMS.txt \
-              --target "$EXPECTED_MAIN_SHA" \
-              --title 'ExtFS for Windows 0.9.2' \
-              --notes-file RELEASE_NOTES.md
+            gh release create v0.9.2 release-assets/ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe release-assets/SHA256SUMS.txt --target "$EXPECTED_MAIN_SHA" --title 'ExtFS for Windows 0.9.2' --notes-file RELEASE_NOTES.md
           fi
       - name: Verify exact explicit assets
         env:
