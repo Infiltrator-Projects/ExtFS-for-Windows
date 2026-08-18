@@ -6,14 +6,17 @@ project_dir=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 test_dir="$project_dir/build/integration"
 fixture_dir="$project_dir/tests/fixtures"
 tool="$project_dir/build/extfs-tool"
+mutator="$project_dir/build/extfs-mutate-test"
 stage_dir="$test_dir/stage"
+mutation_stage="$test_dir/mutation-stage"
 
 # Build a fixture that exercises ordinary files, nested paths, symlinks,
 # sparse mappings and enough directory entries to force ext4 HTree indexing.
 mkdir -p "$test_dir"
-rm -rf "$stage_dir"
-mkdir -p "$stage_dir"
+rm -rf "$stage_dir" "$mutation_stage"
+mkdir -p "$stage_dir" "$mutation_stage"
 cp -R "$fixture_dir/." "$stage_dir/"
+cp "$fixture_dir/hello.txt" "$mutation_stage/hello.txt"
 dd if=/dev/urandom of="$stage_dir/big.bin" bs=1048576 count=2 status=none
 dd if=/dev/urandom of="$test_dir/sparse-seed.bin" bs=1024 count=1 status=none
 truncate -s 8M "$stage_dir/sparse.bin"
@@ -55,8 +58,65 @@ for filesystem in ext2 ext3 ext4; do
     grep 'item-299.txt' "$test_dir/$filesystem-subdir.txt" > /dev/null
 done
 
-# Flip one byte covered by the ext4 superblock checksum.  Acceptance here
-# would mean metadata_csum validation regressed.
+# Run actual ExtFS metadata mutation against real mke2fs images.  The target
+# file is deliberately tiny so ext2/ext3 stay inside the qualified twelve
+# direct blocks.  ext4 disables 64bit/flex_bg so the image matches the bounded
+# 32-byte-descriptor allocator supported by the current checkpoint.
+for filesystem in ext2 ext3 ext4; do
+    image="$test_dir/$filesystem-mutation.img"
+    expected_growth="$test_dir/$filesystem-expected-growth.bin"
+    expected_shrink="$test_dir/$filesystem-expected-shrink.bin"
+    extracted="$test_dir/$filesystem-mutated.bin"
+    truncate -s 64M "$image"
+
+    case "$filesystem" in
+        ext2)
+            mke2fs -q -F -t ext2 -b 1024 -E lazy_itable_init=0 \
+                -L EXTFS-MUT-EXT2 -d "$mutation_stage" "$image"
+            ;;
+        ext3)
+            mke2fs -q -F -t ext3 -b 1024 \
+                -E lazy_itable_init=0,lazy_journal_init=0 \
+                -L EXTFS-MUT-EXT3 -d "$mutation_stage" "$image"
+            ;;
+        ext4)
+            mke2fs -q -F -t ext4 -b 1024 \
+                -O metadata_csum,^64bit,^flex_bg \
+                -E lazy_itable_init=0,lazy_journal_init=0 \
+                -L EXTFS-MUT-EXT4 -d "$mutation_stage" "$image"
+            ;;
+    esac
+
+    if ! e2fsck -f -n "$image" > "$test_dir/$filesystem-before-mutation-fsck.txt" 2>&1; then
+        cat "$test_dir/$filesystem-before-mutation-fsck.txt" >&2
+        echo "Initial $filesystem mutation image failed e2fsck." >&2
+        exit 1
+    fi
+
+    cp "$fixture_dir/hello.txt" "$expected_growth"
+    truncate -s 4096 "$expected_growth"
+    "$mutator" resize "$image" /hello.txt 4096
+    if ! e2fsck -f -n "$image" > "$test_dir/$filesystem-after-growth-fsck.txt" 2>&1; then
+        cat "$test_dir/$filesystem-after-growth-fsck.txt" >&2
+        echo "$filesystem growth produced an inconsistent filesystem." >&2
+        exit 1
+    fi
+    "$tool" extract "$image" /hello.txt "$extracted"
+    cmp "$expected_growth" "$extracted"
+
+    head -c 7 "$fixture_dir/hello.txt" > "$expected_shrink"
+    "$mutator" resize "$image" /hello.txt 7
+    if ! e2fsck -f -n "$image" > "$test_dir/$filesystem-after-shrink-fsck.txt" 2>&1; then
+        cat "$test_dir/$filesystem-after-shrink-fsck.txt" >&2
+        echo "$filesystem shrink produced an inconsistent filesystem." >&2
+        exit 1
+    fi
+    "$tool" extract "$image" /hello.txt "$extracted"
+    cmp "$expected_shrink" "$extracted"
+done
+
+# Flip one byte covered by the ext4 superblock checksum. Acceptance here would
+# mean metadata_csum validation regressed.
 corrupt_image="$test_dir/ext4-corrupt-superblock.img"
 cp "$test_dir/ext4.img" "$corrupt_image"
 printf 'Z' | dd of="$corrupt_image" bs=1 seek=1144 conv=notrunc status=none
@@ -66,4 +126,4 @@ if "$tool" info "$corrupt_image" > "$test_dir/corrupt-output.txt" 2>&1; then
 fi
 grep 'metadata checksum mismatch' "$test_dir/corrupt-output.txt" > /dev/null
 
-echo "Ext2, ext3 and ext4 integration tests passed."
+echo "Ext2, ext3 and ext4 read/traversal and real-image resize tests passed."
