@@ -2,15 +2,11 @@
 
 # Technical sources and provenance
 
-ExtFS 0.9.1 is an original implementation. No source code from Linux, Ext2Fsd,
-Paragon, WinFsp or Microsoft filesystem samples is included.
+ExtFS 0.9.2 is an original implementation. No source code from Linux, Ext2Fsd, Paragon, WinFsp or Microsoft filesystem samples is included.
 
-The ExtFS source, build files and project documentation are distributed under
-`GPL-3.0-or-later`. Version 0.9.1 is the licensing-standardisation checkpoint;
-it does not intentionally change the filesystem implementation from 0.9.0.
+The ExtFS source, build files and project documentation are distributed under `GPL-3.0-or-later`. Version 0.9.1 was the licensing-standardisation checkpoint; 0.9.2 is the subsequent forensic-audit durability and qualification hardening checkpoint.
 
-The ext and JBD2 on-disk formats were implemented from published technical
-material, including:
+The ext and JBD2 on-disk formats were implemented from published technical material, including:
 
 - https://docs.kernel.org/filesystems/ext4/
 - https://docs.kernel.org/filesystems/ext4/journal.html
@@ -23,7 +19,6 @@ The Windows integration follows published Microsoft WDK/IFS interfaces:
 - https://learn.microsoft.com/windows-hardware/drivers/ddi/ntifs/nf-ntifs-ioregisterfilesystem
 - https://learn.microsoft.com/windows-hardware/drivers/ddi/wdm/nf-wdm-kequerysystemtimeprecise
 
-Microsoft FASTFAT/CDFS are architectural references only; their source is not
-copied into ExtFS.
+Microsoft FASTFAT/CDFS are architectural references only; their source is not copied into ExtFS.
 
 Copyright (c) 2026 Shannon Smith.
