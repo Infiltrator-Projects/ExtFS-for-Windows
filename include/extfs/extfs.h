@@ -23,7 +23,7 @@ typedef signed long long   extfs_s64;
 
 #define EXTFS_VERSION_MAJOR 0
 #define EXTFS_VERSION_MINOR 9
-#define EXTFS_VERSION_PATCH 1
+#define EXTFS_VERSION_PATCH 2
 
 #define EXTFS_SUPERBLOCK_SIZE 1024U
 #define EXTFS_MAX_BLOCK_SIZE  65536U
@@ -77,8 +77,8 @@ typedef int (*extfs_read_at_fn)(void *user,
                                 extfs_u32 byte_count);
 
 /* Optional host byte-writer.  Return 0 only when the complete requested range
- * reached the underlying block device; non-zero is an I/O error.  The initial
- * 0.3 write path never asks the host to allocate filesystem space. */
+ * reached the underlying block device; non-zero is an I/O error.  The bounded
+ * data-write path never asks the host to allocate filesystem space. */
 typedef int (*extfs_write_at_fn)(void *user,
                                  extfs_u64 byte_offset,
                                  const void *source,
@@ -113,7 +113,7 @@ typedef struct extfs_io {
 #define EXTFS_READONLY_RISK_UNSUPPORTED_LAYOUT    0x00000010U
 #define EXTFS_READONLY_RISK_UNVERIFIED_CHECKSUMS  0x00000020U
 
-/* Reasons the conservative 0.3 in-place write path must remain disabled. */
+/* Reasons the conservative bounded in-place write path must remain disabled. */
 #define EXTFS_WRITE_RISK_NO_WRITER                 0x00000001U
 #define EXTFS_WRITE_RISK_READONLY_POLICY           0x00000002U
 #define EXTFS_WRITE_RISK_UNSUPPORTED_RO_COMPAT     0x00000004U
@@ -360,7 +360,7 @@ extfs_status extfs_resize_file_ext3_journaled_direct(extfs_volume *volume,
  * depth-1 inode root. Growth can convert a full four-extent inline root into
  * the external form and append/merge additional initialized extents; shrink
  * can collapse the tree back inline. Bitmap, group descriptor, inode, extent
- * block and superblock metadata are committed through JBD2. 0.9.1 still
+ * block and superblock metadata are committed through JBD2. 0.9.2 still
  * requires 32-byte group descriptors and one allocation group per resize and
  * refuses depth > 1, multiple index children, 64bit/flex_bg/bigalloc, holes,
  * unwritten extents and quota-accounted layouts. scratch >= eight blocks.

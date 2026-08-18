@@ -5,7 +5,7 @@ cd /d "%~dp0"
 
 echo.
 echo ============================================================
-echo   ExtFS for Windows 0.9.1 - Build / Validate / Package
+echo   ExtFS for Windows 0.9.2 - Build / Validate / Package
 echo ============================================================
 echo.
 
@@ -64,9 +64,9 @@ echo ============================================================
 echo   BUILD COMPLETED SUCCESSFULLY
  echo ============================================================
 echo.
-if exist "%~dp0ExtFS-for-Windows-0.9.1-experimental-x64-setup.exe" (
+if exist "%~dp0ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe" (
     echo Installer:
-    echo   %~dp0ExtFS-for-Windows-0.9.1-experimental-x64-setup.exe
+    echo   %~dp0ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe
 ) else if exist "%~dp0release\driver\extfs.sys" (
     echo Driver:
     echo   %~dp0release\driver\extfs.sys

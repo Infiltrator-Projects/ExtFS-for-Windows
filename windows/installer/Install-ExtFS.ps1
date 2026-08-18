@@ -87,7 +87,7 @@ if ($LASTEXITCODE -eq 0) {
     & sc.exe stop $serviceName *> $null
     if (-not (Wait-ServiceStopped -Name $serviceName)) {
         Write-Host @'
-ExtFS 0.9.1 is intentionally non-unloadable for the entire boot.
+ExtFS 0.9.2 is intentionally non-unloadable for the entire boot.
 Restart Windows, then run this setup again. This prevents replacing kernel code
 while filesystem objects might still reference the loaded driver.
 '@
@@ -111,7 +111,7 @@ if ($LASTEXITCODE -ne 0) {
     throw "The ExtFS filesystem service could not be created (sc.exe exit $LASTEXITCODE)."
 }
 & sc.exe description $serviceName `
-    'Experimental native ext2/ext3/ext4 filesystem driver with journaled ext3 direct-file resize' | Out-Null
+    'Experimental native ext2/ext3/ext4 filesystem driver with bounded ext2/ext3/ext4 file resize' | Out-Null
 & sc.exe start $serviceName
 if ($LASTEXITCODE -ne 0) {
     throw @"
@@ -120,4 +120,4 @@ Check System event log entries from Service Control Manager and Code Integrity.
 "@
 }
 
-Write-Host 'ExtFS 0.9.1 loaded. Reconnect or reattach the clean ext test volume.'
+Write-Host 'ExtFS 0.9.2 loaded. Reconnect or reattach the clean ext test volume.'
