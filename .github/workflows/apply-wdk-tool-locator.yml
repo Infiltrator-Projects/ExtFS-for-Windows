@@ -1,0 +1,38 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Apply WDK tool locator correction
+
+on:
+  push:
+    branches:
+      - hardening/v0.9.2
+    paths:
+      - tools/apply_wdk_tool_locator.py
+      - .github/workflows/apply-wdk-tool-locator.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: hardening/v0.9.2
+      - name: Apply targeted locator patch
+        run: python3 tools/apply_wdk_tool_locator.py
+      - name: Parse patched PowerShell
+        shell: pwsh
+        run: |
+          [void][scriptblock]::Create((Get-Content -LiteralPath 'windows/Build-And-Validate.ps1' -Raw))
+      - name: Remove one-time helper and commit
+        shell: bash
+        run: |
+          rm tools/apply_wdk_tool_locator.py
+          rm .github/workflows/apply-wdk-tool-locator.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add windows/Build-And-Validate.ps1 tools/apply_wdk_tool_locator.py .github/workflows/apply-wdk-tool-locator.yml
+          git commit -m "Accept architecture-neutral WDK validation tools"
+          git push origin HEAD:hardening/v0.9.2
