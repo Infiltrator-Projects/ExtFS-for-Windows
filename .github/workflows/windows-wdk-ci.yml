@@ -1,0 +1,42 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Windows WDK CI
+
+on:
+  push:
+    branches:
+      - main
+      - hardening/v0.9.2
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  wdk-x64:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Locate NuGet
+        shell: powershell
+        run: |
+          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+          if (-not $nuget) {
+              choco install nuget.commandline -y --no-progress
+          }
+          nuget help | Select-Object -First 1
+
+      - name: WDK Release build and package validation
+        shell: powershell
+        run: |
+          .\windows\Build-And-Validate.ps1 -Configuration Release
+
+      - name: Upload validation report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: extfs-wdk-validation
+          path: |
+            release/driver/build-report.txt
+            release/driver/extfs.inf
+          if-no-files-found: ignore
