@@ -1,0 +1,166 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Publish ExtFS 0.9.2 from verified main
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - .github/workflows/publish-v0.9.2-pr.yml
+
+permissions:
+  contents: write
+
+env:
+  EXPECTED_MAIN_SHA: 40eaa6db663f91a8ad343e07dab06362d71e32d5
+
+jobs:
+  verify-main:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Verify exact release source
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_MAIN_SHA"
+      - name: Re-run unit and real-image qualification
+        shell: bash
+        run: |
+          make clean
+          make all
+          ./build/test-extfs
+          make integration
+      - name: Re-run CMake qualification
+        shell: bash
+        run: |
+          cmake -S . -B build-cmake
+          cmake --build build-cmake
+          ctest --test-dir build-cmake --output-on-failure
+
+  package-main:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Verify exact release source
+        shell: powershell
+        run: |
+          $head = (git rev-parse HEAD).Trim()
+          if ($head -ne $env:EXPECTED_MAIN_SHA) {
+              throw "Expected main $env:EXPECTED_MAIN_SHA but checked out $head."
+          }
+      - name: Ensure NuGet and full WDK validation tools
+        shell: powershell
+        run: |
+          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+          if (-not $nuget) {
+              choco install nuget.commandline -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "NuGet installation failed with exit code $LASTEXITCODE." }
+          }
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $inf2cat) {
+              $winget = Get-Command winget.exe -ErrorAction Stop
+              & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." }
+          }
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $inf2cat) { throw 'Inf2Cat.exe is unavailable after WDK provisioning.' }
+          Write-Host "Inf2Cat: $($inf2cat.FullName)"
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          $makensis = @(
+              (Join-Path $env:ProgramFiles 'NSIS\makensis.exe'),
+              (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe')
+          ) | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+          if (-not $makensis) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "NSIS installation failed with exit code $LASTEXITCODE." }
+          }
+      - name: Build, analyze, validate, test-sign and package
+        shell: powershell
+        run: |
+          .\windows\Build-ExperimentalSetup.ps1
+          $setup = Join-Path $PWD 'ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) { throw 'Expected 0.9.2 setup executable was not produced.' }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash.ToLowerInvariant()
+          "$hash  ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe" | Set-Content -LiteralPath (Join-Path $PWD 'SHA256SUMS.txt') -Encoding ASCII
+          Write-Host "Installer SHA-256: $hash"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extfs-0.9.2-release-pr
+          path: |
+            ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe
+            SHA256SUMS.txt
+          if-no-files-found: error
+
+  publish:
+    needs:
+      - verify-main
+      - package-main
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          name: extfs-0.9.2-release-pr
+          path: release-assets
+      - name: Create or verify v0.9.2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          cat > RELEASE_NOTES.md <<'EOF'
+          ExtFS for Windows 0.9.2 is a forensic-audit hardening and qualification checkpoint for the bounded 0.9 filesystem feature set.
+
+          Hardening includes an ext2 durability-capability preflight that refuses metadata resize before any write when the host cannot provide a stable-storage barrier, plus explicit dirty/mutation/clean flush ordering. It also adds destructive real-image ext2/ext3/ext4 grow/shrink/reopen/e2fsck qualification, expanded sanitizer/static-analysis CI, native Windows WDK Release x64 qualification, and reversible Windows append/EOF-resize test probes.
+
+          The filesystem feature boundary is intentionally not broadened. Namespace mutation, paging writes, volume lock ownership, dirty-journal replay, deeper/multi-leaf ext4 extent trees and 64-bit/flex_bg allocation remain outside this checkpoint. Persistent regular-file mtime/ctime mutation remains deferred.
+
+          Automated qualification passed on 18 August 2026: portable GCC/Clang/unit/real-image/sanitizer/static-analysis checks and Windows WDK Release x64 build, Driver Code Analysis, InfVerif and Inf2Cat/package validation. The release package is development/test signed. Runtime Driver Verifier and destructive mounted-volume Windows qualification remain manual work for a disposable Windows VM and test volume; this is not a production driver.
+
+          Release assets intentionally contain only the experimental x64 setup executable and its SHA-256 checksum. GitHub supplies the canonical source archives for the tag automatically; no duplicate source ZIP or patch asset is published.
+          EOF
+
+          if gh release view v0.9.2 >/dev/null 2>&1; then
+            git fetch origin refs/tags/v0.9.2:refs/tags/v0.9.2 --force
+            test "$(git rev-list -n 1 v0.9.2)" = "$EXPECTED_MAIN_SHA"
+            echo 'Existing v0.9.2 release targets the expected main commit.'
+          else
+            gh release create v0.9.2 \
+              release-assets/ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe \
+              release-assets/SHA256SUMS.txt \
+              --target "$EXPECTED_MAIN_SHA" \
+              --title 'ExtFS for Windows 0.9.2' \
+              --notes-file RELEASE_NOTES.md
+          fi
+      - name: Verify exact explicit assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          assets="$(gh release view v0.9.2 --json assets --jq '.assets[].name')"
+          printf '%s\n' "$assets"
+          test "$(printf '%s\n' "$assets" | grep -c '^ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe$')" -eq 1
+          test "$(printf '%s\n' "$assets" | grep -c '^SHA256SUMS.txt$')" -eq 1
+          test "$(printf '%s\n' "$assets" | wc -l)" -eq 2
+      - name: Remove audit/release working branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          for branch in fix/ext2-durability-audit release-assets-v0.9.1 hardening/v0.9.2 release/v0.9.2-publish; do
+            gh api --method DELETE "/repos/${GITHUB_REPOSITORY}/git/refs/heads/${branch}" >/dev/null 2>&1 || true
+          done
+          remaining="$(gh api --paginate "/repos/${GITHUB_REPOSITORY}/branches" --jq '.[].name')"
+          printf '%s\n' "$remaining"
+          if printf '%s\n' "$remaining" | grep -E '^(fix/ext2-durability-audit|release-assets-v0.9.1|hardening/v0.9.2|release/v0.9.2-publish)$'; then
+            echo 'A stale working branch still exists.' >&2
+            exit 1
+          fi
