@@ -30,6 +30,28 @@ jobs:
           & $nuget.Source locals all -list | Out-Host
           if ($LASTEXITCODE -ne 0) { throw "NuGet self-check failed with exit code $LASTEXITCODE." }
 
+      - name: Ensure full WDK validation tools
+        shell: powershell
+        run: |
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
+              -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          if (-not $inf2cat) {
+              $winget = Get-Command winget.exe -ErrorAction Stop
+              & $winget.Source install --source winget --exact `
+                  --id Microsoft.WindowsWDK.10.0.28000 `
+                  --accept-package-agreements --accept-source-agreements `
+                  --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) {
+                  throw "WDK WinGet installation failed with exit code $LASTEXITCODE."
+              }
+              $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
+                  -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+          }
+          if (-not $inf2cat) { throw 'Full WDK installed but Inf2Cat.exe is still unavailable.' }
+          Write-Host "Inf2Cat: $($inf2cat.FullName)"
+
       - name: WDK Release build and package validation
         shell: powershell
         run: |
