@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - main
+      - hardening/v0.9.2
   pull_request:
 
 permissions:
@@ -15,15 +16,50 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: GCC warnings-as-errors and unit tests
         run: |
           make clean
           make all
           ./build/test-extfs
+
+      - name: Real ext2/ext3/ext4 image qualification
+        run: make integration
+
       - name: CMake and CTest
         run: |
           cmake -S . -B build-cmake
           cmake --build build-cmake
           ctest --test-dir build-cmake --output-on-failure
-      - name: Optional real-image integration harness
-        run: make integration
+
+      - name: ASan and UBSan
+        run: |
+          make clean
+          make all CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
+          ./build/test-extfs
+
+      - name: Clang warnings-as-errors
+        run: |
+          make clean
+          make all CC=clang
+          ./build/test-extfs
+
+      - name: GCC static analyzer
+        run: |
+          gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude \
+              -c core/extfs.c -o /tmp/extfs-fanalyzer.o
+
+      - name: Clang static analyzer
+        run: |
+          clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
+
+      - name: Script and project syntax
+        run: |
+          bash -n tests/integration.sh windows/build-cross-linux.sh
+          python3 - <<'PY'
+          import xml.etree.ElementTree as ET
+          ET.parse('windows/driver/extfs.vcxproj')
+          ET.parse('windows/driver/extfs.sln') if False else None
+          ET.parse('packages.config')
+          print('XML project/config parse passed')
+          PY
