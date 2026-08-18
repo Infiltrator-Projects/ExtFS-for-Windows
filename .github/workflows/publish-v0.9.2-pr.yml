@@ -107,17 +107,19 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
           }
 
-          $temporaryRoot = $null
+          # Import-Certificate into the Root store can block on a trust UI in a
+          # headless runner. certutil performs the same temporary CurrentUser
+          # trust-store staging noninteractively, then we remove the exact cert.
+          $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
+          & $certutil -user -addstore -f Root $certificateFile | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw "certutil root import failed with exit code $LASTEXITCODE." }
           try {
-              $temporaryRoot = Import-Certificate -FilePath $certificateFile -CertStoreLocation 'Cert:\CurrentUser\Root'
               foreach ($file in @($driver, $catalog)) {
                   & $signtool.FullName verify /v /pa $file
                   if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $file with exit code $LASTEXITCODE." }
               }
           } finally {
-              if ($temporaryRoot) {
-                  Get-ChildItem Cert:\CurrentUser\Root | Where-Object Thumbprint -eq $cert.Thumbprint | Remove-Item -Force -ErrorAction SilentlyContinue
-              }
+              & $certutil -user -delstore Root $cert.Thumbprint | Out-Null
           }
 
       - name: Build NSIS installer
