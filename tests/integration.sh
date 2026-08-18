@@ -34,8 +34,6 @@ while [ "$entry" -lt 300 ]; do
     entry=$((entry + 1))
 done
 
-# Recreate the same logical fixture as ext2, ext3 and ext4, then verify that
-# lookup and extraction reproduce the host-side bytes exactly.
 for filesystem in ext2 ext3 ext4; do
     image="$test_dir/$filesystem.img"
     extracted="$test_dir/$filesystem-hello.txt"
@@ -58,10 +56,9 @@ for filesystem in ext2 ext3 ext4; do
     grep 'item-299.txt' "$test_dir/$filesystem-subdir.txt" > /dev/null
 done
 
-# Run actual ExtFS metadata mutation against real mke2fs images.  The target
-# file is deliberately tiny so ext2/ext3 stay inside the qualified twelve
-# direct blocks.  ext4 disables 64bit/flex_bg so the image matches the bounded
-# 32-byte-descriptor allocator supported by the current checkpoint.
+# Run actual ExtFS metadata mutation against real mke2fs images. The ext4 image
+# explicitly disables modern allocation/recovery features outside the bounded
+# 0.9 mutation profile; refusing those features is part of the safety design.
 for filesystem in ext2 ext3 ext4; do
     image="$test_dir/$filesystem-mutation.img"
     expected_growth="$test_dir/$filesystem-expected-growth.bin"
@@ -81,12 +78,13 @@ for filesystem in ext2 ext3 ext4; do
             ;;
         ext4)
             mke2fs -q -F -t ext4 -b 1024 \
-                -O metadata_csum,^64bit,^flex_bg \
+                -O metadata_csum,^64bit,^flex_bg,^fast_commit,^orphan_file \
                 -E lazy_itable_init=0,lazy_journal_init=0 \
                 -L EXTFS-MUT-EXT4 -d "$mutation_stage" "$image"
             ;;
     esac
 
+    "$tool" info "$image" > "$test_dir/$filesystem-mutation-info.txt"
     if ! e2fsck -f -n "$image" > "$test_dir/$filesystem-before-mutation-fsck.txt" 2>&1; then
         cat "$test_dir/$filesystem-before-mutation-fsck.txt" >&2
         echo "Initial $filesystem mutation image failed e2fsck." >&2
@@ -115,8 +113,6 @@ for filesystem in ext2 ext3 ext4; do
     cmp "$expected_shrink" "$extracted"
 done
 
-# Flip one byte covered by the ext4 superblock checksum. Acceptance here would
-# mean metadata_csum validation regressed.
 corrupt_image="$test_dir/ext4-corrupt-superblock.img"
 cp "$test_dir/ext4.img" "$corrupt_image"
 printf 'Z' | dd of="$corrupt_image" bs=1 seek=1144 conv=notrunc status=none
