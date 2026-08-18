@@ -116,7 +116,7 @@ int main(int argc, char **argv)
     extfs_inode inode;
     extfs_inode verify_inode;
     extfs_status status;
-    extfs_u64 scratch_bytes;
+    extfs_u32 scratch_size;
     void *scratch;
     int result = 1;
 
@@ -147,24 +147,18 @@ int main(int argc, char **argv)
                 extfs_status_string(status));
         goto Exit;
     }
-    if (volume.block_size == 0U || volume.block_size > EXTFS_MAX_BLOCK_SIZE ||
-        (extfs_u64)volume.block_size > (~(extfs_u64)0) / 8U) {
+    if (volume.block_size == 0U || volume.block_size > EXTFS_MAX_BLOCK_SIZE) {
         fprintf(stderr, "extfs-mutate-test: invalid scratch geometry\n");
         goto Exit;
     }
-    scratch_bytes = (extfs_u64)volume.block_size * 8U;
-    if (scratch_bytes > (extfs_u64)(size_t)-1 || scratch_bytes > 0xFFFFFFFFULL) {
-        fprintf(stderr, "extfs-mutate-test: scratch size is not representable\n");
-        goto Exit;
-    }
-    scratch = malloc((size_t)scratch_bytes);
+    scratch_size = volume.block_size * 8U;
+    scratch = malloc(scratch_size);
     if (scratch == NULL) {
         fprintf(stderr, "extfs-mutate-test: out of memory\n");
         goto Exit;
     }
 
-    status = extfs_resolve_path(&volume, path, &inode, scratch,
-                                (extfs_u32)scratch_bytes);
+    status = extfs_resolve_path(&volume, path, &inode, scratch, scratch_size);
     if (status != EXTFS_OK) {
         fprintf(stderr, "extfs-mutate-test: %s: %s\n", path,
                 extfs_status_string(status));
@@ -177,8 +171,7 @@ int main(int argc, char **argv)
         goto Exit;
     }
 
-    status = resize_inode(&volume, &inode, new_size, scratch,
-                          (extfs_u32)scratch_bytes);
+    status = resize_inode(&volume, &inode, new_size, scratch, scratch_size);
     if (status != EXTFS_OK) {
         fprintf(stderr, "extfs-mutate-test: resize failed: %s\n",
                 extfs_status_string(status));
