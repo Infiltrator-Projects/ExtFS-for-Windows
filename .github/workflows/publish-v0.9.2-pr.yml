@@ -82,6 +82,7 @@ jobs:
         shell: powershell
         timeout-minutes: 5
         run: |
+          $ErrorActionPreference = 'Stop'
           $release = Join-Path $PWD 'release\driver'
           $driver = Join-Path $release 'extfs.sys'
           $catalog = Join-Path $release 'extfs.cat'
@@ -107,19 +108,46 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
           }
 
-          # Import-Certificate into the Root store can block on a trust UI in a
-          # headless runner. certutil performs the same temporary CurrentUser
-          # trust-store staging noninteractively, then we remove the exact cert.
-          $certutil = Join-Path $env:SystemRoot 'System32\certutil.exe'
-          & $certutil -user -addstore -f Root $certificateFile | Out-Host
-          if ($LASTEXITCODE -ne 0) { throw "certutil root import failed with exit code $LASTEXITCODE." }
+          # Stage the self-signed certificate in the CurrentUser root store through
+          # .NET X509Store. This is deterministic in headless hosted runners and
+          # avoids certutil/GUI trust-store paths that can block indefinitely.
+          $publicCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.RawData)
+          $root = [Security.Cryptography.X509Certificates.X509Store]::new(
+              [Security.Cryptography.X509Certificates.StoreName]::Root,
+              [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+          try {
+              $root.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+              $root.Add($publicCert)
+          } finally {
+              $root.Close()
+          }
+
           try {
               foreach ($file in @($driver, $catalog)) {
-                  & $signtool.FullName verify /v /pa $file
-                  if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $file with exit code $LASTEXITCODE." }
+                  $verified = Get-AuthenticodeSignature -LiteralPath $file
+                  Write-Host "$file signature status: $($verified.Status)"
+                  if ($verified.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
+                      -not $verified.SignerCertificate -or
+                      $verified.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
+                      throw "Authenticode verification failed for $file: $($verified.Status)"
+                  }
               }
           } finally {
-              & $certutil -user -delstore Root $cert.Thumbprint | Out-Null
+              $root = [Security.Cryptography.X509Certificates.X509Store]::new(
+                  [Security.Cryptography.X509Certificates.StoreName]::Root,
+                  [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+              try {
+                  $root.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+                  $matches = $root.Certificates.Find(
+                      [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+                      $cert.Thumbprint,
+                      $false)
+                  foreach ($match in $matches) { $root.Remove($match) }
+              } finally {
+                  $root.Close()
+                  $publicCert.Dispose()
+              }
+              Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
           }
 
       - name: Build NSIS installer
