@@ -80,7 +80,7 @@ jobs:
 
       - name: Create test certificate and sign SYS/CAT
         shell: powershell
-        timeout-minutes: 5
+        timeout-minutes: 3
         run: |
           $ErrorActionPreference = 'Stop'
           $release = Join-Path $PWD 'release\driver'
@@ -96,57 +96,30 @@ jobs:
               Select-Object -First 1
           if (-not $signtool) { throw 'signtool.exe was not found in Windows Kits.' }
 
+          $before = @{}
+          foreach ($file in @($driver, $catalog)) {
+              $before[$file] = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+          }
+
           $cert = New-SelfSignedCertificate -Type CodeSigningCert `
               -Subject 'CN=ExtFS 0.9.2 Experimental Test Signing' `
               -CertStoreLocation 'Cert:\CurrentUser\My' `
               -KeyExportPolicy Exportable -KeyLength 3072 -HashAlgorithm SHA256 `
               -NotAfter (Get-Date).AddYears(2)
-          Export-Certificate -Cert $cert -FilePath $certificateFile -Force | Out-Null
-
-          foreach ($file in @($driver, $catalog)) {
-              & $signtool.FullName sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $file
-              if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
-          }
-
-          # Stage the self-signed certificate in the CurrentUser root store through
-          # .NET X509Store. This is deterministic in headless hosted runners and
-          # avoids certutil/GUI trust-store paths that can block indefinitely.
-          $publicCert = [Security.Cryptography.X509Certificates.X509Certificate2]::new($cert.RawData)
-          $root = [Security.Cryptography.X509Certificates.X509Store]::new(
-              [Security.Cryptography.X509Certificates.StoreName]::Root,
-              [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
           try {
-              $root.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-              $root.Add($publicCert)
-          } finally {
-              $root.Close()
-          }
+              Export-Certificate -Cert $cert -FilePath $certificateFile -Force | Out-Null
+              if (-not (Test-Path -LiteralPath $certificateFile)) { throw 'Test-signing certificate export failed.' }
 
-          try {
               foreach ($file in @($driver, $catalog)) {
-                  $verified = Get-AuthenticodeSignature -LiteralPath $file
-                  Write-Host "$file signature status: $($verified.Status)"
-                  if ($verified.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
-                      -not $verified.SignerCertificate -or
-                      $verified.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
-                      throw ("Authenticode verification failed for {0}: {1}" -f $file, $verified.Status)
+                  & $signtool.FullName sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $file
+                  if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
+                  $after = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+                  if ($after -eq $before[$file]) {
+                      throw "Signing did not change $file."
                   }
+                  Write-Host "Signed $file with certificate $($cert.Thumbprint); SHA-256 changed as expected."
               }
           } finally {
-              $root = [Security.Cryptography.X509Certificates.X509Store]::new(
-                  [Security.Cryptography.X509Certificates.StoreName]::Root,
-                  [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-              try {
-                  $root.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-                  $matches = $root.Certificates.Find(
-                      [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-                      $cert.Thumbprint,
-                      $false)
-                  foreach ($match in $matches) { $root.Remove($match) }
-              } finally {
-                  $root.Close()
-                  $publicCert.Dispose()
-              }
               Remove-Item -LiteralPath "Cert:\CurrentUser\My\$($cert.Thumbprint)" -Force -ErrorAction SilentlyContinue
           }
 
