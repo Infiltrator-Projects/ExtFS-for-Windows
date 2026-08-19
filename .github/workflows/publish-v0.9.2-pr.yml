@@ -129,7 +129,7 @@ jobs:
                   if ($verified.Status -ne [System.Management.Automation.SignatureStatus]::Valid -or
                       -not $verified.SignerCertificate -or
                       $verified.SignerCertificate.Thumbprint -ne $cert.Thumbprint) {
-                      throw "Authenticode verification failed for $file: $($verified.Status)"
+                      throw ("Authenticode verification failed for {0}: {1}" -f $file, $verified.Status)
                   }
               }
           } finally {
