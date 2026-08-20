@@ -6,7 +6,7 @@
 
 0.9.3 retains the 0.9.2 filesystem mutation boundary and repairs Windows-adapter lifecycle/release defects found by the subsequent forensic audit. Every `FILE_OBJECT.FsContext` now points to the required `FSRTL_ADVANCED_FCB_HEADER`; mapped-section closure is decided through Memory Manager before an FCB is reclaimed or a removable-media cache is refreshed; header size fields follow successful resize operations; removable-media verification resynchronises `FILE_READ_ONLY_DEVICE`; the staged INF is pinned and asserted at `0.9.3.0`; and Infiltratr Common 1.9.0 remains pinned as the kernel-safe compiler-annotation dependency.
 
-Publication is gated on Portable ExtFS CI and a bounded Windows WDK package job that builds, analyses, catalogs, signs, verifies and assembles the installer. The installed driver is not exercised by hosted CI: runtime Driver Verifier, mapped-file stress and destructive mounted-volume qualification remain explicit manual tests on a disposable Windows VM/test volume.
+Publication is gated on Portable ExtFS CI and a bounded Windows WDK package job that builds, analyses, catalogs, signs, inspects signatures/catalog membership without mutating trust stores, and assembles the installer. The installed driver is not exercised by hosted CI: runtime Driver Verifier, mapped-file stress and destructive mounted-volume qualification remain explicit manual tests on a disposable Windows VM/test volume.
 
 ## Established Windows baseline — 11 August 2026
 

@@ -49,34 +49,60 @@ function Find-MakeNSIS {
     throw 'makensis.exe was not found. Install NSIS to build the setup executable.'
 }
 
-function Invoke-BoundedSignatureVerification {
+function Invoke-BoundedSignatureInspection {
     param(
         [Parameter(Mandatory)][string]$Tool,
         [Parameter(Mandatory)][string]$File,
+        [Parameter(Mandatory)][string]$ExpectedThumbprint,
         [string]$Catalog,
         [ValidateRange(5, 300)][int]$TimeoutSeconds = 45
     )
 
     $job = Start-Job -ScriptBlock {
         param($Verifier, $Target, $PackageCatalog)
-        if ($PackageCatalog) {
-            & $Verifier verify /v /pa /c $PackageCatalog $Target
-        } else {
-            & $Verifier verify /v /pa $Target
+        $signerThumbprint = $null
+        if (-not $PackageCatalog) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $Target
+            if ($signature.SignerCertificate) {
+                $signerThumbprint = $signature.SignerCertificate.Thumbprint
+            }
         }
-        if ($LASTEXITCODE -ne 0) {
-            throw "SignTool verification failed for $Target with exit code $LASTEXITCODE."
+        if ($PackageCatalog) {
+            $output = @(& $Verifier verify /v /pa /c $PackageCatalog $Target 2>&1)
+        } else {
+            $output = @(& $Verifier verify /v /pa $Target 2>&1)
+        }
+        [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output = ($output | Out-String)
+            SignerThumbprint = $signerThumbprint
         }
     } -ArgumentList $Tool, $File, $Catalog
     try {
         if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
             Stop-Job -Job $job -ErrorAction SilentlyContinue
-            throw "Timed out after $TimeoutSeconds seconds verifying $File."
+            throw "Timed out after $TimeoutSeconds seconds inspecting $File."
         }
-        Receive-Job -Job $job -Wait -ErrorAction Stop
+        $result = Receive-Job -Job $job -Wait -ErrorAction Stop
     } finally {
         Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
     }
+
+    Write-Host $result.Output
+    if (-not $Catalog -and
+        $result.SignerThumbprint -ne $ExpectedThumbprint) {
+        throw "Signer thumbprint mismatch for $File; found '$($result.SignerThumbprint)'."
+    }
+    if ($result.ExitCode -eq 0) { return }
+
+    # The package is intentionally self-signed. An untrusted-root result is
+    # acceptable only after SignTool has validated the file/signature/catalog
+    # far enough to reach chain policy. Every other nonzero result remains fatal.
+    if ($result.Output -notmatch
+        'terminated in a root certificate which is not trusted') {
+        throw "Signature inspection failed for $File with exit code $($result.ExitCode)."
+    }
+    Write-Host "Signature and hash inspection reached the expected self-signed trust boundary for $File."
 }
 
 & $buildScript -Configuration Release -SkipCodeAnalysis:$SkipCodeAnalysis
@@ -130,32 +156,16 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash -eq $unsignedCat
     throw "Signing did not change $catalog; refusing to package an unsigned catalog."
 }
 
-# Add temporary trust using the .NET certificate store API. The previous
-# Import-Certificate call could block indefinitely on a headless runner.
-$rootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
-    [Security.Cryptography.X509Certificates.StoreName]::Root,
-    [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
-$addedRoot = $false
-try {
-    $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
-    $existingRoots = $rootStore.Certificates.Find(
-        [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
-        $cert.Thumbprint, $false)
-    if ($existingRoots.Count -eq 0) {
-        $rootStore.Add($cert)
-        $addedRoot = $true
-    }
-    foreach ($file in @($driver, $catalog)) {
-        Invoke-BoundedSignatureVerification -Tool $signtool -File $file
-    }
-    Invoke-BoundedSignatureVerification -Tool $signtool -File $driver -Catalog $catalog
-    Invoke-BoundedSignatureVerification -Tool $signtool -File $inf -Catalog $catalog
-} finally {
-    if ($addedRoot) {
-        $rootStore.Remove($cert)
-    }
-    $rootStore.Close()
+# Inspect embedded signatures and catalog membership without mutating either
+# the user or machine trust store. Each inspection is isolated and bounded.
+foreach ($file in @($driver, $catalog)) {
+    Invoke-BoundedSignatureInspection -Tool $signtool -File $file `
+        -ExpectedThumbprint $cert.Thumbprint
 }
+Invoke-BoundedSignatureInspection -Tool $signtool -File $driver `
+    -Catalog $catalog -ExpectedThumbprint $cert.Thumbprint
+Invoke-BoundedSignatureInspection -Tool $signtool -File $inf `
+    -Catalog $catalog -ExpectedThumbprint $cert.Thumbprint
 
 $installerScript = Join-Path $PSScriptRoot 'installer\extfs-installer.nsi'
 Push-Location (Split-Path -Parent $installerScript)
