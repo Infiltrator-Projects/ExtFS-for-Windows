@@ -4,7 +4,7 @@
 
 ExtFS is an original native Windows filesystem project written primarily in C. The goal is native ext2/ext3/ext4 access through the normal Windows I/O system. A later research goal is an ext4 system volume capable of carrying Windows.
 
-Version 0.9.2 is a forensic-audit hardening and qualification checkpoint. It does not expand the supported filesystem feature boundary beyond 0.9.1; it fixes the ext2 direct-resize durability ordering, strengthens real-image mutation qualification, adds permanent portable/static-analysis CI and adds a Windows WDK CI path. The historical 0.9.1 release remains the GPL-3.0-or-later/SPDX standardisation checkpoint.
+Version 0.9.3 is a maintenance release on the 0.9.2 audit-hardened feature boundary. It fixes Windows FCB lifetime reclamation, resynchronises removable-media write/read-only device characteristics, corrects stale release metadata, and pins Infiltratr Common 1.9.0 as the kernel-safe shared compiler-annotation dependency. It does not expand the supported ext filesystem mutation boundary.
 
 The current bounded ext4 mutation path supports eligible clean regular files represented either by the inode-resident depth-0 extent root or by one external depth-0 leaf referenced by a depth-1 inode root. A full four-entry inline root can be promoted to that leaf when growth needs another extent; later growth may merge or append initialized extents in the same leaf, and shrink can collapse the tree back into the inode when four or fewer extents remain. External-leaf checksums, allocation accounting and inode/group/superblock checksums are validated or rebuilt before commit.
 
@@ -32,7 +32,7 @@ cd ExtFS-for-Windows
 BUILD-EXTFS.cmd
 ```
 
-The expected package is `ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe`. It is a test-signed experimental kernel driver, not a production filesystem.
+The expected package is `ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe`. It is a test-signed experimental kernel driver, not a production filesystem.
 
 ## Deliberate boundaries
 
