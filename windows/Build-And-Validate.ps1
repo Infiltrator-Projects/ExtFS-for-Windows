@@ -168,25 +168,14 @@ $inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe' -RestoredPackages $packagesDi
 
 Write-Host "WDK NuGet props: $wdkProps"
 Write-Host "Building ExtFS $Configuration x64 with: $msbuild"
-$previousStampInfDate = $env:STAMPINF_DATE
-$previousStampInfVersion = $env:STAMPINF_VERSION
-try {
-    # StampInf otherwise substitutes a timestamp-derived version. Pin both
-    # values so the built/staged INF is exactly the release version.
-    $env:STAMPINF_DATE = $driverDate
-    $env:STAMPINF_VERSION = $driverVersion
-    & $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" /p:Platform=x64
-    if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE." }
+& $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" /p:Platform=x64
+if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE." }
 
-    if (-not $SkipCodeAnalysis) {
-        Write-Host 'Running WDK/Visual C++ driver Code Analysis...'
-        & $msbuild $project /m "/p:Configuration=$Configuration" /p:Platform=x64 `
-            /p:RunCodeAnalysisOnce=True
-        if ($LASTEXITCODE -ne 0) { throw "Driver Code Analysis failed with exit code $LASTEXITCODE." }
-    }
-} finally {
-    $env:STAMPINF_DATE = $previousStampInfDate
-    $env:STAMPINF_VERSION = $previousStampInfVersion
+if (-not $SkipCodeAnalysis) {
+    Write-Host 'Running WDK/Visual C++ driver Code Analysis...'
+    & $msbuild $project /m "/p:Configuration=$Configuration" /p:Platform=x64 `
+        /p:RunCodeAnalysisOnce=True
+    if ($LASTEXITCODE -ne 0) { throw "Driver Code Analysis failed with exit code $LASTEXITCODE." }
 }
 
 $driverRoot = Join-Path $PSScriptRoot 'driver'
@@ -198,23 +187,15 @@ if (-not $driver) {
     throw 'The build completed but extfs.sys could not be located under windows\driver.'
 }
 
-# StampInf writes the package INF into the configuration output directory.  Stage
-# that exact INF rather than the source template so validation/catalog hashing
-# describes precisely the files that will be shipped together.
-$builtInf = Get-ChildItem -LiteralPath $driverRoot -Filter extfs.inf -File -Recurse |
-    Where-Object FullName -Match "\\$Configuration\\" |
-    Sort-Object LastWriteTimeUtc -Descending |
-    Select-Object -First 1
-if (-not $builtInf) {
-    throw 'The build completed but the stamped extfs.inf could not be located under windows\driver.'
-}
-$driverVerLine = Get-Content -LiteralPath $builtInf.FullName |
+# The checked-in INF is the release manifest. WDK's build output may carry a
+# development timestamp/version, so never stage that generated copy.
+$driverVerLine = Get-Content -LiteralPath $inf |
     Where-Object { $_ -match '^\s*DriverVer\s*=' } |
     Select-Object -First 1
 $normalisedDriverVer = $driverVerLine -replace '\s', ''
 $expectedDriverVer = "DriverVer=$driverDate,$driverVersion"
 if ($normalisedDriverVer -ne $expectedDriverVer) {
-    throw "Stamped INF version mismatch: expected '$expectedDriverVer', found '$driverVerLine'."
+    throw "Source INF version mismatch: expected '$expectedDriverVer', found '$driverVerLine'."
 }
 
 if (Test-Path -LiteralPath $release) {
@@ -225,7 +206,7 @@ $stagedDriver = Join-Path $release 'extfs.sys'
 $stagedInf = Join-Path $release 'extfs.inf'
 $stagedCatalog = Join-Path $release 'extfs.cat'
 Copy-Item -LiteralPath $driver.FullName -Destination $stagedDriver -Force
-Copy-Item -LiteralPath $builtInf.FullName -Destination $stagedInf -Force
+Copy-Item -LiteralPath $inf -Destination $stagedInf -Force
 
 Write-Host 'Running InfVerif in Windows Driver mode against the staged package...'
 & $infverif /w /v $stagedInf

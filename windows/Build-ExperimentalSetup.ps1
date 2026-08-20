@@ -44,16 +44,21 @@ function Invoke-BoundedSignatureVerification {
     param(
         [Parameter(Mandatory)][string]$Tool,
         [Parameter(Mandatory)][string]$File,
+        [string]$Catalog,
         [ValidateRange(5, 300)][int]$TimeoutSeconds = 45
     )
 
     $job = Start-Job -ScriptBlock {
-        param($Verifier, $Target)
-        & $Verifier verify /v /pa $Target
+        param($Verifier, $Target, $PackageCatalog)
+        if ($PackageCatalog) {
+            & $Verifier verify /v /pa /c $PackageCatalog $Target
+        } else {
+            & $Verifier verify /v /pa $Target
+        }
         if ($LASTEXITCODE -ne 0) {
             throw "SignTool verification failed for $Target with exit code $LASTEXITCODE."
         }
-    } -ArgumentList $Tool, $File
+    } -ArgumentList $Tool, $File, $Catalog
     try {
         if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
             Stop-Job -Job $job -ErrorAction SilentlyContinue
@@ -68,6 +73,7 @@ function Invoke-BoundedSignatureVerification {
 & $buildScript -Configuration Release -SkipCodeAnalysis:$SkipCodeAnalysis
 
 $signtool = Find-WindowsKitTool -Name 'signtool.exe'
+$inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe'
 $makensis = Find-MakeNSIS
 
 foreach ($required in @($driver, $inf, $catalog)) {
@@ -91,20 +97,28 @@ if (-not $cert) {
     Export-Certificate -Cert $cert -FilePath $certificateFile -Force | Out-Null
 }
 
-$unsignedHashes = @{}
-foreach ($file in @($driver, $catalog)) {
-    $unsignedHashes[$file] = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+$unsignedDriverHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash
+Write-Host "Signing the ExtFS driver with test certificate $($cert.Thumbprint)..."
+& $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $driver
+if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $driver with exit code $LASTEXITCODE." }
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash -eq $unsignedDriverHash) {
+    throw "Signing did not change $driver; refusing to package an unsigned driver."
 }
 
-Write-Host "Signing the ExtFS driver package with test certificate $($cert.Thumbprint)..."
-foreach ($file in @($driver, $catalog)) {
-    Write-Host "  Signing $file"
-    & $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $file
-    if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
-    $signedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
-    if ($signedHash -eq $unsignedHashes[$file]) {
-        throw "Signing did not change $file; refusing to package an unsigned payload."
-    }
+# The catalog must hash the final signed SYS. Regenerate it after embedded
+# signing, then sign the catalog itself.
+Remove-Item -LiteralPath $catalog -Force
+$inf2catOs = '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
+& $inf2cat "/driver:$release" "/os:$inf2catOs" /uselocaltime
+if ($LASTEXITCODE -ne 0) { throw "Inf2Cat regeneration failed with exit code $LASTEXITCODE." }
+if (-not (Test-Path -LiteralPath $catalog)) { throw "Inf2Cat did not regenerate $catalog." }
+
+$unsignedCatalogHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash
+Write-Host "Signing the regenerated ExtFS catalog..."
+& $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $catalog
+if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $catalog with exit code $LASTEXITCODE." }
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash -eq $unsignedCatalogHash) {
+    throw "Signing did not change $catalog; refusing to package an unsigned catalog."
 }
 
 # Add temporary trust using the .NET certificate store API. The previous
@@ -125,6 +139,8 @@ try {
     foreach ($file in @($driver, $catalog)) {
         Invoke-BoundedSignatureVerification -Tool $signtool -File $file
     }
+    Invoke-BoundedSignatureVerification -Tool $signtool -File $driver -Catalog $catalog
+    Invoke-BoundedSignatureVerification -Tool $signtool -File $inf -Catalog $catalog
 } finally {
     if ($addedRoot) {
         $rootStore.Remove($cert)
