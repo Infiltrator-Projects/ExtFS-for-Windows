@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Force publish ExtFS 0.9.3
+
+on:
+  push:
+    branches:
+      - forensic-fix-common19
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify exact merged release commit
+        shell: powershell
+        run: |
+          $actual = (git rev-parse HEAD).Trim()
+          $expected = 'd7b43df5c672927b767e2ef63a58b724f23c61ad'
+          if ($actual -ne $expected) { throw "main moved: expected $expected, found $actual" }
+          if ((Get-Content -LiteralPath 'third_party\infiltratr-common\VERSION' -Raw).Trim() -ne '1.9.0') {
+              throw 'Infiltratr Common is not pinned at 1.9.0.'
+          }
+
+      - name: Locate NuGet
+        shell: powershell
+        run: |
+          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+          if (-not $nuget) {
+              choco install nuget.commandline -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Ensure full WDK validation tools
+        shell: powershell
+        run: |
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
+              -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          if (-not $inf2cat) {
+              $winget = Get-Command winget.exe -ErrorAction Stop
+              & $winget.Source install --source winget --exact `
+                  --id Microsoft.WindowsWDK.10.0.28000 `
+                  --accept-package-agreements --accept-source-agreements `
+                  --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue) -and
+              -not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')) -and
+              -not (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'))) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NSIS install failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Build and verify installer
+        shell: powershell
+        run: |
+          .\windows\Build-ExperimentalSetup.ps1
+          $setup = 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
+          $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
+          if ($version -ne '0.9.3.0') { throw "Installer version mismatch: $version" }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
+          "EXTFS_SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Installer SHA-256: $hash"
+
+      - name: Publish or verify v0.9.3
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          $exists = $false
+          & gh release view v0.9.3 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { $exists = $true }
+
+          if (-not $exists) {
+              $notes = @"
+          ExtFS for Windows 0.9.3 is the Windows-lifecycle/Common-1.9 maintenance release on the 0.9.2 audit-hardened filesystem feature boundary.
+
+          Changes:
+          - safe shared-FCB lifetime reclamation with FILE_OBJECT/live-section safeguards;
+          - removable-media read-only characteristic resynchronisation;
+          - corrected 0.9.3 binary/INF/installer metadata;
+          - Infiltratr Common 1.9.0 pinned at a65b279b40682791f2cfefb4d9bdc274790b0c77;
+          - unchanged conservative ext2/ext3/ext4 mutation boundary.
+
+          Development/test-signed experimental kernel driver. Use only on disposable/test Windows systems and backed-up test volumes.
+
+          Installer SHA-256: $env:EXTFS_SETUP_SHA256
+          "@
+              Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
+              & gh release create v0.9.3 $setup `
+                  --repo $env:GITHUB_REPOSITORY `
+                  --target d7b43df5c672927b767e2ef63a58b724f23c61ad `
+                  --title 'ExtFS for Windows 0.9.3' `
+                  --notes-file release-notes.md
+              if ($LASTEXITCODE -ne 0) {
+                  Start-Sleep -Seconds 5
+              }
+          }
+
+          $json = & gh release view v0.9.3 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish
+          if ($LASTEXITCODE -ne 0) { throw 'v0.9.3 is not published.' }
+          $release = $json | ConvertFrom-Json
+          if ($release.tagName -ne 'v0.9.3' -or $release.name -ne 'ExtFS for Windows 0.9.3' -or $release.isDraft -or $release.isPrerelease) {
+              throw 'v0.9.3 release metadata is incorrect.'
+          }
+          $asset = @($release.assets | Where-Object name -eq $setup)
+          if ($asset.Count -ne 1) { throw "Expected exactly one installer asset '$setup'; found $($asset.Count)." }
+          Write-Host "Verified published release v0.9.3 and installer asset $setup"
+
+      - name: Delete merged maintenance branch
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          & gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/forensic-fix-common19"
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to delete forensic-fix-common19.' }
+          Write-Host 'Deleted forensic-fix-common19.'
