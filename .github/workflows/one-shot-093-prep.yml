@@ -1,0 +1,171 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: One-shot 0.9.3 release prep
+
+on:
+  push:
+    branches:
+      - forensic-fix-common19
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Apply 0.9.3 maintenance release metadata
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=None):
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              found = s.count(old)
+              if count is not None and found != count:
+                  raise SystemExit(f'{path}: expected {count} occurrence(s), found {found}: {old!r}')
+              if found == 0:
+                  raise SystemExit(f'{path}: text not found: {old!r}')
+              p.write_text(s.replace(old, new), encoding='utf-8')
+
+          # Authoritative binary/package version metadata.
+          for path in [
+              'windows/Build-ExperimentalSetup.ps1',
+              'windows/installer/extfs-installer.nsi',
+              'windows/driver/extfs.rc',
+          ]:
+              p = Path(path)
+              s = p.read_text(encoding='utf-8')
+              if '0.9.2' not in s:
+                  raise SystemExit(f'{path}: expected 0.9.2 metadata not found')
+              p.write_text(s.replace('0.9.2', '0.9.3'), encoding='utf-8')
+
+          replace('windows/driver/extfs.inf',
+                  'DriverVer   = 08/18/2026,0.9.2.0',
+                  'DriverVer   = 08/20/2026,0.9.3.0', 1)
+
+          replace('windows/driver/extfs_driver.c',
+                  '0.9.2 is deliberately resident for the entire boot',
+                  '0.9.3 is deliberately resident for the entire boot', 1)
+          replace('windows/driver/extfs_driver.c',
+                  'IFS 0.9.2 loaded', 'IFS 0.9.3 loaded', 1)
+
+          # User-facing release identity.
+          readme = Path('README.md')
+          s = readme.read_text(encoding='utf-8')
+          old = ('Version 0.9.2 is a forensic-audit hardening and qualification checkpoint. '
+                 'It does not expand the supported filesystem feature boundary beyond 0.9.1; '
+                 'it fixes the ext2 direct-resize durability ordering, strengthens real-image '
+                 'mutation qualification, adds permanent portable/static-analysis CI and adds '
+                 'a Windows WDK CI path. The historical 0.9.1 release remains the '
+                 'GPL-3.0-or-later/SPDX standardisation checkpoint.')
+          new = ('Version 0.9.3 is a maintenance release on the 0.9.2 audit-hardened feature '
+                 'boundary. It fixes Windows FCB lifetime reclamation, resynchronises removable-media '
+                 'write/read-only device characteristics, corrects stale release metadata, and pins '
+                 'Infiltratr Common 1.9.0 as the kernel-safe shared compiler-annotation dependency. '
+                 'It does not expand the supported ext filesystem mutation boundary.')
+          if s.count(old) != 1:
+              raise SystemExit('README.md: unexpected release paragraph shape')
+          s = s.replace(old, new)
+          s = s.replace('ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe',
+                        'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe')
+          readme.write_text(s, encoding='utf-8')
+
+          # Current build documentation while retaining the historical 0.9.2 qualification record.
+          p = Path('docs/WINDOWS_BUILD.md')
+          s = p.read_text(encoding='utf-8')
+          old = ('ExtFS 0.9.2 is the forensic-audit hardening release of the bounded depth-1 ext4 '
+                 'extent-tree checkpoint. The established 0.6.0 Windows baseline completed both the '
+                 'WDK Release build and Driver Code Analysis with 0 warnings / 0 errors. Development '
+                 'continued through 0.7.0, 0.8.0 and 0.9.0 without independent Windows qualification, '
+                 'so 0.9.2 must be qualified from its own source before Windows build quality is claimed.')
+          new = ('ExtFS 0.9.3 is the Windows-lifecycle/Common-1.9 maintenance release on the bounded '
+                 'depth-1 ext4 extent-tree feature boundary established and audit-qualified in 0.9.2. '
+                 'The filesystem mutation boundary is unchanged; 0.9.3 must pass the permanent '
+                 'portable and Windows WDK gates from its own source before publication.')
+          if s.count(old) != 1:
+              raise SystemExit('docs/WINDOWS_BUILD.md: unexpected opening paragraph shape')
+          s = s.replace(old, new)
+          s = s.replace('ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe',
+                        'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe')
+          s = s.replace('0.9.2 routes `IRP_MJ_WRITE`', '0.9.3 routes `IRP_MJ_WRITE`')
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('docs/FEATURE_SUPPORT.md')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('# Feature support in 0.9.2', '# Feature support in 0.9.3', 1)
+          s = s.replace(
+              '0.9.2 hardens durability and qualification without expanding the supported filesystem feature boundary from 0.9.1.',
+              '0.9.3 retains the 0.9.2 filesystem feature boundary while hardening Windows adapter lifetime/media-state handling and adopting Infiltratr Common 1.9.0.',
+              1)
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('VERIFICATION.md')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace('# Verification record — 0.9.2 forensic-audit hardening checkpoint',
+                        '# Verification record — 0.9.3 maintenance checkpoint', 1)
+          marker = '## Established Windows baseline — 11 August 2026\n'
+          section = (
+              '## 0.9.3 Windows lifecycle/Common 1.9 maintenance\n\n'
+              '0.9.3 retains the 0.9.2 filesystem mutation boundary and repairs Windows-adapter '
+              'lifecycle/release defects found by the subsequent forensic audit: shared FCBs now '
+              'track FILE_OBJECT lifetime and are reclaimed only after handles, FILE_OBJECT references '
+              'and section/cache/image references have drained; removable-media verification now '
+              'resynchronises `FILE_READ_ONLY_DEVICE`; stale 0.9.2/PE metadata is corrected; and '
+              'Infiltratr Common 1.9.0 is pinned as the kernel-safe compiler-annotation dependency.\n\n'
+              'Publication is gated on the permanent Portable ExtFS CI and Windows WDK CI passing on '
+              'the final 0.9.3 source tree. Runtime Driver Verifier and destructive mounted-volume '
+              'qualification remain separate manual tests.\n\n')
+          if marker not in s:
+              raise SystemExit('VERIFICATION.md: baseline marker missing')
+          s = s.replace(marker, section + marker, 1)
+          s = s.replace('outside the 0.9.2 supported mutation boundary.',
+                        'outside the 0.9.3 supported mutation boundary.')
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('ROADMAP.md')
+          s = p.read_text(encoding='utf-8')
+          marker = ('- 0.9.2 Windows WDK + Code Analysis CI path. **Implemented; qualification result '
+                    'recorded in `VERIFICATION.md`.**\n')
+          addition = (
+              marker +
+              '- 0.9.3 Windows FCB lifetime reclamation and removable-media read-only-state resynchronisation. **Implemented.**\n'
+              '- 0.9.3 Infiltratr Common 1.9.0 kernel-safe annotation dependency and release-metadata cleanup. **Implemented.**\n')
+          if s.count(marker) != 1:
+              raise SystemExit('ROADMAP.md: 0.9.2 WDK marker missing')
+          p.write_text(s.replace(marker, addition, 1), encoding='utf-8')
+
+          # Keep the cross-build PE image line consistent with the 0.9 maintenance series.
+          # The release semver is carried by INF/RC/installer metadata above.
+
+          print('Remaining 0.9.2 references are historical/base-release references:')
+          for p in Path('.').rglob('*'):
+              if p.is_file() and '.git' not in p.parts and 'third_party' not in p.parts:
+                  try:
+                      text = p.read_text(encoding='utf-8')
+                  except Exception:
+                      continue
+                  for i, line in enumerate(text.splitlines(), 1):
+                      if '0.9.2' in line:
+                          print(f'{p}:{i}:{line}')
+          PY
+
+      - name: Commit prepared release metadata
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo 'No release-prep changes required.'
+            exit 0
+          fi
+          git config user.name 'HAL ExtFS release'
+          git config user.email 'actions@users.noreply.github.com'
+          git add -- README.md ROADMAP.md VERIFICATION.md docs/WINDOWS_BUILD.md docs/FEATURE_SUPPORT.md windows/Build-ExperimentalSetup.ps1 windows/installer/extfs-installer.nsi windows/driver/extfs.rc windows/driver/extfs.inf windows/driver/extfs_driver.c
+          git diff --cached --check
+          git commit -m 'Prepare ExtFS 0.9.3 maintenance release'
+          git push origin HEAD:forensic-fix-common19
