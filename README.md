@@ -10,7 +10,7 @@ The current bounded ext4 mutation path supports eligible clean regular files rep
 
 Earlier capabilities remain: read access to supported ext2/ext3/ext4, same-size overwrite of allocated initialized regular-file data, ext2 direct-file resize, journaled ext3 direct-file resize, and checksum-aware bounded ext4 resize. Depth greater than one, more than one external leaf, 64-bit/flex_bg allocation, multi-group allocation in one resize, sparse/unwritten allocation, namespace mutation and dirty-journal replay remain disabled. Unsupported or unsafe layouts fail closed.
 
-The portable core is freestanding C: no operating-system headers, internal heap allocation, threads or global mutable state.
+The portable core is freestanding C: no operating-system headers, internal heap allocation, threads or global mutable state. The Windows adapter consumes only the kernel-safe compiler-annotation header from Infiltratr Common 1.9.0, pinned as a Git submodule; Common user-mode runtime sources are not linked into `extfs.sys`.
 
 ## Portable build
 
@@ -24,9 +24,11 @@ make integration
 
 ## Windows build
 
-On Windows with Visual Studio/WDK and NSIS:
+On Windows with Visual Studio/WDK and NSIS, clone with submodules so the exact Infiltratr Common dependency is present:
 
 ```bat
+git clone --recurse-submodules https://github.com/The-First-Infiltrator/ExtFS-for-Windows.git
+cd ExtFS-for-Windows
 BUILD-EXTFS.cmd
 ```
 

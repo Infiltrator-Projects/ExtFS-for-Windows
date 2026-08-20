@@ -15,6 +15,14 @@ $release = Join-Path $root 'release\driver'
 $packagesConfig = Join-Path $root 'packages.config'
 $packagesDir = Join-Path $root 'packages'
 $wdkNuGetVersion = '10.0.28000.2526'
+$commonVersionFile = Join-Path $root 'third_party\infiltratr-common\VERSION'
+if (-not (Test-Path -LiteralPath $commonVersionFile)) {
+    throw 'Infiltratr Common 1.9.0 is missing. Clone ExtFS with --recurse-submodules.'
+}
+$commonVersion = (Get-Content -LiteralPath $commonVersionFile -Raw).Trim()
+if ($commonVersion -ne '1.9.0') {
+    throw "ExtFS requires Infiltratr Common 1.9.0; found '$commonVersion'."
+}
 
 function Find-NuGet {
     $command = Get-Command nuget.exe -ErrorAction SilentlyContinue

@@ -7,10 +7,20 @@ build="$root/build-cross"
 cc=x86_64-w64-mingw32-gcc
 windres=x86_64-w64-mingw32-windres
 
+common_root="$root/third_party/infiltratr-common"
+if [ ! -f "$common_root/VERSION" ]; then
+    echo "Infiltratr Common 1.9.0 is missing. Clone with --recurse-submodules." >&2
+    exit 1
+fi
+if [ "$(cat "$common_root/VERSION")" != "1.9.0" ]; then
+    echo "ExtFS requires Infiltratr Common 1.9.0." >&2
+    exit 1
+fi
+
 mkdir -p "$build"
 
 # Build as freestanding kernel code: there is no C runtime in the final .sys.
-common="-std=c11 -Wall -Wextra -Werror -D_AMD64_ -DAMD64 -DNTDDI_VERSION=0x0A000000 -I$root/include -ffreestanding -fno-stack-protector -fno-builtin"
+common="-std=c11 -Wall -Wextra -Werror -D_AMD64_ -DAMD64 -DNTDDI_VERSION=0x0A000000 -I$root/include -I$common_root/include -ffreestanding -fno-stack-protector -fno-builtin"
 
 $cc $common '-D_Dispatch_type_(x)=' \
     -I/usr/x86_64-w64-mingw32/include/ddk \
@@ -32,7 +42,7 @@ $cc -nostdlib -shared \
     -Wl,--major-os-version,6 \
     -Wl,--minor-os-version,2 \
     -Wl,--major-image-version,0 \
-    -Wl,--minor-image-version,2 \
+    -Wl,--minor-image-version,9 \
     -Wl,--exclude-all-symbols \
     -o "$build/extfs.sys" \
     "$build/extfs_driver.o" "$build/extfs_core.o" "$build/extfs_res.o" \
