@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+$packagesDir = Join-Path $root 'packages'
 $release = Join-Path $root 'release\driver'
 $driver = Join-Path $release 'extfs.sys'
 $inf = Join-Path $release 'extfs.inf'
@@ -18,14 +19,22 @@ function Find-WindowsKitTool {
     param([Parameter(Mandatory)][string]$Name)
     $command = Get-Command $Name -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
-    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'
-    $candidate = Get-ChildItem -LiteralPath $kits -Filter $Name -File -Recurse `
-        -ErrorAction SilentlyContinue |
-        Where-Object FullName -Match '\\x64\\' |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if (-not $candidate) { throw "$Name was not found in the installed Windows Kits." }
-    return $candidate.FullName
+
+    foreach ($searchRoot in @(
+        $packagesDir,
+        (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10')
+    )) {
+        if (-not (Test-Path -LiteralPath $searchRoot)) { continue }
+        $candidates = @(Get-ChildItem -LiteralPath $searchRoot -Filter $Name -File -Recurse `
+            -ErrorAction SilentlyContinue | Sort-Object FullName -Descending)
+        if ($candidates.Count -eq 0) { continue }
+        $candidate = $candidates |
+            Where-Object FullName -Match '\\x64\\' |
+            Select-Object -First 1
+        if (-not $candidate) { $candidate = $candidates | Select-Object -First 1 }
+        if ($candidate) { return $candidate.FullName }
+    }
+    throw "$Name was not found in the restored WDK packages or installed Windows Kits."
 }
 
 function Find-MakeNSIS {
