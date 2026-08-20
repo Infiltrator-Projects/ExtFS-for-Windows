@@ -98,8 +98,11 @@ function Invoke-BoundedSignatureInspection {
     # The package is intentionally self-signed. An untrusted-root result is
     # acceptable only after SignTool has validated the file/signature/catalog
     # far enough to reach chain policy. Every other nonzero result remains fatal.
-    if ($result.Output -notmatch
-        'terminated in a root certificate which is not trusted') {
+    $untrustedRoot = (
+        $result.Output -match 'terminated in a root' -and
+        $result.Output -match 'certificate which is not trusted'
+    )
+    if (-not $untrustedRoot) {
         throw "Signature inspection failed for $File with exit code $($result.ExitCode)."
     }
     Write-Host "Signature and hash inspection reached the expected self-signed trust boundary for $File."
