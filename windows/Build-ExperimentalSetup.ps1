@@ -40,6 +40,31 @@ function Find-MakeNSIS {
     throw 'makensis.exe was not found. Install NSIS to build the setup executable.'
 }
 
+function Invoke-BoundedSignatureVerification {
+    param(
+        [Parameter(Mandatory)][string]$Tool,
+        [Parameter(Mandatory)][string]$File,
+        [ValidateRange(5, 300)][int]$TimeoutSeconds = 45
+    )
+
+    $job = Start-Job -ScriptBlock {
+        param($Verifier, $Target)
+        & $Verifier verify /v /pa $Target
+        if ($LASTEXITCODE -ne 0) {
+            throw "SignTool verification failed for $Target with exit code $LASTEXITCODE."
+        }
+    } -ArgumentList $Tool, $File
+    try {
+        if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+            throw "Timed out after $TimeoutSeconds seconds verifying $File."
+        }
+        Receive-Job -Job $job -Wait -ErrorAction Stop
+    } finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+}
+
 & $buildScript -Configuration Release -SkipCodeAnalysis:$SkipCodeAnalysis
 
 $signtool = Find-WindowsKitTool -Name 'signtool.exe'
@@ -66,30 +91,45 @@ if (-not $cert) {
     Export-Certificate -Cert $cert -FilePath $certificateFile -Force | Out-Null
 }
 
+$unsignedHashes = @{}
+foreach ($file in @($driver, $catalog)) {
+    $unsignedHashes[$file] = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+}
+
 Write-Host "Signing the ExtFS driver package with test certificate $($cert.Thumbprint)..."
 foreach ($file in @($driver, $catalog)) {
     Write-Host "  Signing $file"
     & $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $file
     if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
+    $signedHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $file).Hash
+    if ($signedHash -eq $unsignedHashes[$file]) {
+        throw "Signing did not change $file; refusing to package an unsigned payload."
+    }
 }
 
-# A self-signed development certificate is not normally a trusted root on the
-# build host.  Trust its public half in CurrentUser only for verification, then
-# remove that temporary trust entry before returning.
-$temporaryRoot = $null
+# Add temporary trust using the .NET certificate store API. The previous
+# Import-Certificate call could block indefinitely on a headless runner.
+$rootStore = [Security.Cryptography.X509Certificates.X509Store]::new(
+    [Security.Cryptography.X509Certificates.StoreName]::Root,
+    [Security.Cryptography.X509Certificates.StoreLocation]::CurrentUser)
+$addedRoot = $false
 try {
-    $temporaryRoot = Import-Certificate -FilePath $certificateFile `
-        -CertStoreLocation 'Cert:\CurrentUser\Root'
+    $rootStore.Open([Security.Cryptography.X509Certificates.OpenFlags]::ReadWrite)
+    $existingRoots = $rootStore.Certificates.Find(
+        [Security.Cryptography.X509Certificates.X509FindType]::FindByThumbprint,
+        $cert.Thumbprint, $false)
+    if ($existingRoots.Count -eq 0) {
+        $rootStore.Add($cert)
+        $addedRoot = $true
+    }
     foreach ($file in @($driver, $catalog)) {
-        & $signtool verify /v /pa $file
-        if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $file with exit code $LASTEXITCODE." }
+        Invoke-BoundedSignatureVerification -Tool $signtool -File $file
     }
 } finally {
-    if ($temporaryRoot) {
-        Get-ChildItem Cert:\CurrentUser\Root |
-            Where-Object Thumbprint -eq $cert.Thumbprint |
-            Remove-Item -Force -ErrorAction SilentlyContinue
+    if ($addedRoot) {
+        $rootStore.Remove($cert)
     }
+    $rootStore.Close()
 }
 
 $installerScript = Join-Path $PSScriptRoot 'installer\extfs-installer.nsi'

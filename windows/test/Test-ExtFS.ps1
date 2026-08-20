@@ -8,7 +8,9 @@ param(
     [switch]$ExerciseInPlaceWrite,
     [switch]$ExerciseResize,
     [ValidateRange(1, 1048576)]
-    [int]$ResizeDeltaBytes = 1024
+    [int]$ResizeDeltaBytes = 1024,
+    [ValidateRange(1, 100000)]
+    [int]$OpenCloseIterations = 250
 )
 
 $ErrorActionPreference = 'Stop'
@@ -23,6 +25,8 @@ $results = [ordered]@{
     ReadFile = $null
     ReadBytes = 0
     CopyOut = $false
+    OpenCloseIterations = $OpenCloseIterations
+    OpenCloseStress = $null
     InPlaceWrite = $null
     InPlaceWriteRestored = $null
     AppendRoundTrip = $null
@@ -78,6 +82,19 @@ if ($file) {
     }
     $results.CopyOut = $true
 
+    # Repeatedly create and close FILE_OBJECTs for the same inode. This is a
+    # practical regression probe for FCB reference/reclamation mistakes.
+    for ($iteration = 0; $iteration -lt $OpenCloseIterations; ++$iteration) {
+        $probe = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
+            [IO.FileAccess]::Read, [IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete)
+        try {
+            if ($probe.Length -gt 0) { [void]$probe.ReadByte() }
+        } finally {
+            $probe.Dispose()
+        }
+    }
+    $results.OpenCloseStress = $true
+
     if ($ExerciseInPlaceWrite) {
         if ($file.Length -lt 8) { throw 'Known file must be at least 8 bytes for the in-place write test.' }
         $rw = [IO.File]::Open($file.FullName, [IO.FileMode]::Open,
@@ -87,7 +104,7 @@ if ($file) {
         try {
             if ($rw.Read($original, 0, 8) -ne 8) { throw 'Could not read write-test prefix.' }
             $haveOriginal = $true
-            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS092')
+            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS093')
             $rw.Position = 0
             $rw.Write($marker, 0, $marker.Length)
             $rw.Flush()
@@ -126,7 +143,7 @@ if ($file) {
         try {
             # FileMode.Append requests append semantics from Windows. The marker
             # is verified at the new EOF and then removed by restoring old EOF.
-            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS092')
+            $marker = [Text.Encoding]::ASCII.GetBytes('EXTFS093')
             $append = [IO.File]::Open($file.FullName, [IO.FileMode]::Append,
                 [IO.FileAccess]::Write, [IO.FileShare]::Read)
             try {
@@ -244,6 +261,6 @@ $report = Join-Path $env:TEMP "ExtFS-qualification-$drive-$([DateTime]::Now.ToSt
 $results | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $report -Encoding UTF8
 
 Write-Host ''
-Write-Host 'ExtFS 0.9.2 qualification probe passed.'
+Write-Host 'ExtFS 0.9.3 qualification probe passed.'
 Write-Host "Report: $report"
 $results | Format-List | Out-Host

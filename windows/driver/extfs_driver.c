@@ -2,7 +2,7 @@
 #include "extfs_driver.h"
 
 /*
- * ExtFS 0.9.2 is a deliberately conservative synchronous native IFS.  All ext
+ * ExtFS 0.9.3 is a deliberately conservative synchronous native IFS.  All ext
  * on-disk decisions remain in the portable core; this file translates Windows
  * IRPs, names, synchronization and information records.  Supported writes are
  * bounded to existing-file data overwrite plus the filesystem-specific ext2,
@@ -160,7 +160,9 @@ static PEXTFS_FCB ExtfsFcbFromFile(PFILE_OBJECT FileObject)
     if (FileObject == NULL || FileObject->FsContext == NULL) {
         return NULL;
     }
-    fcb = (PEXTFS_FCB)FileObject->FsContext;
+    fcb = CONTAINING_RECORD(
+        (PFSRTL_ADVANCED_FCB_HEADER)FileObject->FsContext,
+        EXTFS_FCB, Header);
     return fcb->Signature == EXTFS_FCB_SIGNATURE ? fcb : NULL;
 }
 
@@ -241,6 +243,75 @@ static VOID ExtfsReleaseMetadata(PEXTFS_VCB Vcb)
     FsRtlExitFileSystem();
 }
 
+static VOID ExtfsSyncFcbHeaderSizes(PEXTFS_FCB Fcb)
+{
+    ULONGLONG size;
+    ULONGLONG blockSize;
+    ULONGLONG allocation;
+
+    size = Fcb->VolumeOpen ? 0ULL : Fcb->Inode.size;
+    if (size > 0x7FFFFFFFFFFFFFFFULL)
+        size = 0x7FFFFFFFFFFFFFFFULL;
+    blockSize = Fcb->Vcb->Volume.block_size;
+    if (blockSize == 0ULL ||
+        size > 0x7FFFFFFFFFFFFFFFULL - (blockSize - 1ULL)) {
+        allocation = size;
+    } else {
+        allocation = (size + blockSize - 1ULL) & ~(blockSize - 1ULL);
+    }
+
+    ExAcquireFastMutex(&Fcb->HeaderMutex);
+    Fcb->Header.FileSize.QuadPart = (LONGLONG)size;
+    Fcb->Header.ValidDataLength.QuadPart = (LONGLONG)size;
+    Fcb->Header.AllocationSize.QuadPart = (LONGLONG)allocation;
+    ExReleaseFastMutex(&Fcb->HeaderMutex);
+}
+
+static VOID ExtfsDestroyFcb(PEXTFS_FCB Fcb)
+{
+    FsRtlTeardownPerStreamContexts(&Fcb->Header);
+    ExDeleteResourceLite(&Fcb->PagingIoResource);
+    ExDeleteResourceLite(&Fcb->DataResource);
+    ExFreePool(Fcb);
+}
+
+static VOID ExtfsDestroyFcbList(PLIST_ENTRY List)
+{
+    while (!IsListEmpty(List)) {
+        PLIST_ENTRY entry = RemoveHeadList(List);
+        PEXTFS_FCB fcb = CONTAINING_RECORD(entry, EXTFS_FCB, Links);
+        InitializeListHead(&fcb->Links);
+        ExtfsDestroyFcb(fcb);
+    }
+}
+
+/*
+ * Only Memory Manager can determine whether mapped data/image sections have
+ * drained. SharedCacheMap must also be absent because this driver deliberately
+ * does not initialise Cache Manager maps.
+ */
+static VOID ExtfsCollectReapableFcbsLocked(PEXTFS_VCB Vcb,
+                                           PLIST_ENTRY ReapList,
+                                           BOOLEAN DelaySectionClose)
+{
+    PLIST_ENTRY entry = Vcb->FcbList.Flink;
+
+    while (entry != &Vcb->FcbList) {
+        PLIST_ENTRY next = entry->Flink;
+        PEXTFS_FCB fcb = CONTAINING_RECORD(entry, EXTFS_FCB, Links);
+
+        if (fcb->FileObjectCount == 0 && fcb->HandleCount == 0 &&
+            fcb->SectionObjectPointers.SharedCacheMap == NULL &&
+            MmForceSectionClosed(&fcb->SectionObjectPointers,
+                                 DelaySectionClose)) {
+            RemoveEntryList(entry);
+            InsertTailList(ReapList, entry);
+            fcb->Signature = 0U;
+        }
+        entry = next;
+    }
+}
+
 static NTSTATUS ExtfsAcquireFcb(PEXTFS_VCB Vcb,
                                 const extfs_inode *Inode,
                                 BOOLEAN VolumeOpen,
@@ -252,7 +323,9 @@ static NTSTATUS ExtfsAcquireFcb(PEXTFS_VCB Vcb,
     PEXTFS_FCB candidate;
     PEXTFS_FCB fcb;
     NTSTATUS status = STATUS_SUCCESS;
+    LIST_ENTRY reapList;
 
+    InitializeListHead(&reapList);
     candidate = (PEXTFS_FCB)ExtfsAllocate(sizeof(*candidate));
     if (INFILTRATR_UNLIKELY(candidate == NULL))
         return STATUS_INSUFFICIENT_RESOURCES;
@@ -266,8 +339,23 @@ static NTSTATUS ExtfsAcquireFcb(PEXTFS_VCB Vcb,
         ExFreePool(candidate);
         return status;
     }
+    status = ExInitializeResourceLite(&candidate->PagingIoResource);
+    if (!NT_SUCCESS(status)) {
+        ExDeleteResourceLite(&candidate->DataResource);
+        ExFreePool(candidate);
+        return status;
+    }
+    ExInitializeFastMutex(&candidate->HeaderMutex);
+    FsRtlSetupAdvancedHeader(&candidate->Header, &candidate->HeaderMutex);
+    candidate->Header.NodeTypeCode = EXTFS_FCB_NODE_TYPE;
+    candidate->Header.NodeByteSize = (CSHORT)sizeof(*candidate);
+    candidate->Header.IsFastIoPossible = FastIoIsNotPossible;
+    candidate->Header.Resource = &candidate->DataResource;
+    candidate->Header.PagingIoResource = &candidate->PagingIoResource;
+    ExtfsSyncFcbHeaderSizes(candidate);
 
     ExtfsAcquireFcbList(Vcb);
+    ExtfsCollectReapableFcbsLocked(Vcb, &reapList, FALSE);
     fcb = ExtfsFindFcbLocked(Vcb, Inode, VolumeOpen);
     if (fcb != NULL) {
         status = IoCheckShareAccess(DesiredAccess, ShareAccess, FileObject,
@@ -291,10 +379,8 @@ static NTSTATUS ExtfsAcquireFcb(PEXTFS_VCB Vcb,
     }
     ExtfsReleaseFcbList(Vcb);
 
-    if (candidate != NULL) {
-        ExDeleteResourceLite(&candidate->DataResource);
-        ExFreePool(candidate);
-    }
+    ExtfsDestroyFcbList(&reapList);
+    if (candidate != NULL) ExtfsDestroyFcb(candidate);
     if (!NT_SUCCESS(status)) return status;
     *Result = fcb;
     return STATUS_SUCCESS;
@@ -314,46 +400,24 @@ static VOID ExtfsCleanupFileObject(PFILE_OBJECT FileObject)
     ExtfsReleaseFcbList(fcb->Vcb);
 }
 
-/* Drop the FILE_OBJECT lifetime reference at CLOSE. The FCB remains shared
- * while another FILE_OBJECT still points at it, even if every handle has already
- * completed CLEANUP. This prevents stale FsContext/SectionObjectPointer references
- * while avoiding unbounded per-inode nonpaged-pool growth across a long mount. */
+/* Drop the FILE_OBJECT lifetime reference at CLOSE. Memory Manager performs
+ * the authoritative mapped-section close check; FCBs that still back a live
+ * view remain cached and are reconsidered after later closes/opens. */
 static VOID ExtfsReleaseFcbReference(PEXTFS_FCB Fcb)
 {
     PEXTFS_VCB vcb;
-    BOOLEAN freeFcb = FALSE;
+    LIST_ENTRY reapList;
 
     if (INFILTRATR_UNLIKELY(Fcb == NULL || Fcb->Vcb == NULL)) return;
+    InitializeListHead(&reapList);
     vcb = Fcb->Vcb;
     ExtfsAcquireFcbList(vcb);
     if (Fcb->FileObjectCount > 0) --Fcb->FileObjectCount;
     InterlockedDecrement(&vcb->FileObjectCount);
-    if (Fcb->FileObjectCount == 0 && Fcb->HandleCount == 0 &&
-        Fcb->SectionObjectPointers.DataSectionObject == NULL &&
-        Fcb->SectionObjectPointers.SharedCacheMap == NULL &&
-        Fcb->SectionObjectPointers.ImageSectionObject == NULL) {
-        RemoveEntryList(&Fcb->Links);
-        InitializeListHead(&Fcb->Links);
-        Fcb->Signature = 0U;
-        freeFcb = TRUE;
-    }
+    ExtfsCollectReapableFcbsLocked(vcb, &reapList, TRUE);
     ExtfsReleaseFcbList(vcb);
 
-    if (freeFcb) {
-        ExDeleteResourceLite(&Fcb->DataResource);
-        ExFreePool(Fcb);
-    }
-}
-
-static VOID ExtfsFreeFcbCache(PEXTFS_VCB Vcb)
-{
-    while (!IsListEmpty(&Vcb->FcbList)) {
-        PLIST_ENTRY entry = RemoveHeadList(&Vcb->FcbList);
-        PEXTFS_FCB fcb = CONTAINING_RECORD(entry, EXTFS_FCB, Links);
-        fcb->Signature = 0U;
-        ExDeleteResourceLite(&fcb->DataResource);
-        ExFreePool(fcb);
-    }
+    ExtfsDestroyFcbList(&reapList);
 }
 
 /*
@@ -1278,7 +1342,7 @@ NTSTATUS ExtfsDispatchCreate(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     ccb->Signature = EXTFS_CCB_SIGNATURE;
     ccb->GrantedAccess = access;
     ccb->CreateOptions = options;
-    fileObject->FsContext = fcb;
+    fileObject->FsContext = &fcb->Header;
     fileObject->FsContext2 = ccb;
     fileObject->SectionObjectPointer = &fcb->SectionObjectPointers;
     fileObject->Vpb = vcb->Vpb;
@@ -1504,6 +1568,7 @@ NTSTATUS ExtfsDispatchWrite(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             status = ExtfsStatusToNt(extStatus);
             return ExtfsCompleteIrp(Irp, status, 0U);
         }
+        ExtfsSyncFcbHeaderSizes(fcb);
     }
 
     extStatus = extfs_write_file_existing(&fcb->Vcb->Volume, &fcb->Inode,
@@ -1576,6 +1641,7 @@ NTSTATUS ExtfsDispatchSetInformation(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         fcb, (extfs_u64)requestedSize, scratch,
         fcb->Vcb->Volume.block_size * 8U);
     ExtfsReleaseMetadata(fcb->Vcb);
+    if (extStatus == EXTFS_OK) ExtfsSyncFcbHeaderSizes(fcb);
     ExtfsReleaseFileData(fcb);
     ExFreePool(scratch);
 
@@ -2297,23 +2363,40 @@ static NTSTATUS ExtfsVerifyMountedVolume(PEXTFS_VCB Vcb)
      * been modified while absent even if its UUID and geometry are unchanged.
      * Do not validate such handles against stale inode snapshots; only refresh
      * the volume after all opens have drained, then discard the inert FCB cache. */
-    ExtfsAcquireFcbList(Vcb);
-    if (Vcb->OpenHandleCount != 0 || Vcb->FileObjectCount != 0) {
+    {
+        LIST_ENTRY reapList;
+        InitializeListHead(&reapList);
+        ExtfsAcquireFcbList(Vcb);
+        if (Vcb->OpenHandleCount != 0 || Vcb->FileObjectCount != 0) {
+            ExtfsReleaseFcbList(Vcb);
+            return STATUS_WRONG_VOLUME;
+        }
+
+        /*
+         * A zero FILE_OBJECT count is not sufficient: mapped sections can
+         * outlive their originating handle. Detach only FCBs for which Memory
+         * Manager confirms that data/image sections are closed.
+         */
+        ExtfsCollectReapableFcbsLocked(Vcb, &reapList, FALSE);
+        if (!IsListEmpty(&Vcb->FcbList)) {
+            ExtfsReleaseFcbList(Vcb);
+            ExtfsDestroyFcbList(&reapList);
+            return STATUS_WRONG_VOLUME;
+        }
+
+        Vcb->Volume = observed;
+        Vcb->WriteEnabled =
+            ExtfsDeviceIsWritable(Vcb->TargetDeviceObject) &&
+            extfs_write_assess(&Vcb->Volume, &risks) == EXTFS_OK ? TRUE : FALSE;
+        if (Vcb->VolumeDeviceObject != NULL) {
+            if (Vcb->WriteEnabled)
+                Vcb->VolumeDeviceObject->Characteristics &= ~FILE_READ_ONLY_DEVICE;
+            else
+                Vcb->VolumeDeviceObject->Characteristics |= FILE_READ_ONLY_DEVICE;
+        }
         ExtfsReleaseFcbList(Vcb);
-        return STATUS_WRONG_VOLUME;
+        ExtfsDestroyFcbList(&reapList);
     }
-    ExtfsFreeFcbCache(Vcb);
-    Vcb->Volume = observed;
-    Vcb->WriteEnabled =
-        ExtfsDeviceIsWritable(Vcb->TargetDeviceObject) &&
-        extfs_write_assess(&Vcb->Volume, &risks) == EXTFS_OK ? TRUE : FALSE;
-    if (Vcb->VolumeDeviceObject != NULL) {
-        if (Vcb->WriteEnabled)
-            Vcb->VolumeDeviceObject->Characteristics &= ~FILE_READ_ONLY_DEVICE;
-        else
-            Vcb->VolumeDeviceObject->Characteristics |= FILE_READ_ONLY_DEVICE;
-    }
-    ExtfsReleaseFcbList(Vcb);
     Vcb->Vpb->RealDevice->Flags &= ~DO_VERIFY_VOLUME;
     return STATUS_SUCCESS;
 }

@@ -10,6 +10,7 @@
 #define EXTFS_POOL_TAG 0x53465845U
 #define EXTFS_VCB_SIGNATURE 0x42435645U /* EVCB */
 #define EXTFS_FCB_SIGNATURE 0x42434645U /* EFCB */
+#define EXTFS_FCB_NODE_TYPE ((CSHORT)0xEF01)
 #define EXTFS_CCB_SIGNATURE 0x42434345U /* ECCB */
 #define EXTFS_MAX_PATTERN_CHARS 260U
 
@@ -47,12 +48,16 @@ typedef struct _EXTFS_VCB {
  * same FCB so Windows share access and section-object state remain coherent.
  * FCBs are reclaimed after the final FILE_OBJECT closes. */
 typedef struct _EXTFS_FCB {
+    /* Must remain first: FILE_OBJECT.FsContext points at this header. */
+    FSRTL_ADVANCED_FCB_HEADER Header;
     ULONG Signature;
     LIST_ENTRY Links;
     PEXTFS_VCB Vcb;
     extfs_inode Inode;
     SECTION_OBJECT_POINTERS SectionObjectPointers;
     ERESOURCE DataResource;
+    ERESOURCE PagingIoResource;
+    FAST_MUTEX HeaderMutex;
     SHARE_ACCESS ShareAccess;
     LONG HandleCount;
     LONG FileObjectCount;

@@ -15,6 +15,8 @@ $release = Join-Path $root 'release\driver'
 $packagesConfig = Join-Path $root 'packages.config'
 $packagesDir = Join-Path $root 'packages'
 $wdkNuGetVersion = '10.0.28000.2526'
+$driverVersion = '0.9.3.0'
+$driverDate = '08/20/2026'
 $commonVersionFile = Join-Path $root 'third_party\infiltratr-common\VERSION'
 if (-not (Test-Path -LiteralPath $commonVersionFile)) {
     throw 'Infiltratr Common 1.9.0 is missing. Clone ExtFS with --recurse-submodules.'
@@ -166,14 +168,25 @@ $inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe' -RestoredPackages $packagesDi
 
 Write-Host "WDK NuGet props: $wdkProps"
 Write-Host "Building ExtFS $Configuration x64 with: $msbuild"
-& $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" /p:Platform=x64
-if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE." }
+$previousStampInfDate = $env:STAMPINF_DATE
+$previousStampInfVersion = $env:STAMPINF_VERSION
+try {
+    # StampInf otherwise substitutes a timestamp-derived version. Pin both
+    # values so the built/staged INF is exactly the release version.
+    $env:STAMPINF_DATE = $driverDate
+    $env:STAMPINF_VERSION = $driverVersion
+    & $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" /p:Platform=x64
+    if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE." }
 
-if (-not $SkipCodeAnalysis) {
-    Write-Host 'Running WDK/Visual C++ driver Code Analysis...'
-    & $msbuild $project /m "/p:Configuration=$Configuration" /p:Platform=x64 `
-        /p:RunCodeAnalysisOnce=True
-    if ($LASTEXITCODE -ne 0) { throw "Driver Code Analysis failed with exit code $LASTEXITCODE." }
+    if (-not $SkipCodeAnalysis) {
+        Write-Host 'Running WDK/Visual C++ driver Code Analysis...'
+        & $msbuild $project /m "/p:Configuration=$Configuration" /p:Platform=x64 `
+            /p:RunCodeAnalysisOnce=True
+        if ($LASTEXITCODE -ne 0) { throw "Driver Code Analysis failed with exit code $LASTEXITCODE." }
+    }
+} finally {
+    $env:STAMPINF_DATE = $previousStampInfDate
+    $env:STAMPINF_VERSION = $previousStampInfVersion
 }
 
 $driverRoot = Join-Path $PSScriptRoot 'driver'
@@ -194,6 +207,14 @@ $builtInf = Get-ChildItem -LiteralPath $driverRoot -Filter extfs.inf -File -Recu
     Select-Object -First 1
 if (-not $builtInf) {
     throw 'The build completed but the stamped extfs.inf could not be located under windows\driver.'
+}
+$driverVerLine = Get-Content -LiteralPath $builtInf.FullName |
+    Where-Object { $_ -match '^\s*DriverVer\s*=' } |
+    Select-Object -First 1
+$normalisedDriverVer = $driverVerLine -replace '\s', ''
+$expectedDriverVer = "DriverVer=$driverDate,$driverVersion"
+if ($normalisedDriverVer -ne $expectedDriverVer) {
+    throw "Stamped INF version mismatch: expected '$expectedDriverVer', found '$driverVerLine'."
 }
 
 if (Test-Path -LiteralPath $release) {
@@ -233,6 +254,7 @@ $report = @(
     "InfVerif: $infverif"
     "Inf2Cat: $inf2cat"
     "CodeAnalysis: $(-not $SkipCodeAnalysis)"
+    "DriverVer: $driverDate,$driverVersion"
     "Driver: $stagedDriver"
     "DriverSHA256: $hash"
     "CatalogSHA256: $catHash"

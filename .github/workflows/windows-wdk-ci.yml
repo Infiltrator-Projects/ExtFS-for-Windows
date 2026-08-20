@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-name: Windows WDK CI
+name: Windows WDK package CI
 
 on:
   push:
@@ -11,14 +11,16 @@ permissions:
   contents: read
 
 jobs:
-  wdk-x64:
+  package-x64:
     runs-on: windows-latest
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
 
       - name: Locate NuGet
+        timeout-minutes: 5
         shell: powershell
         run: |
           $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
@@ -28,42 +30,50 @@ jobs:
               $nuget = Get-Command nuget.exe -ErrorAction Stop
           }
           Write-Host "NuGet: $($nuget.Source)"
-          & $nuget.Source locals all -list | Out-Host
-          if ($LASTEXITCODE -ne 0) { throw "NuGet self-check failed with exit code $LASTEXITCODE." }
 
       - name: Ensure full WDK validation tools
+        timeout-minutes: 15
         shell: powershell
         run: |
-          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
-              -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
-              Select-Object -First 1
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $inf2cat) {
               $winget = Get-Command winget.exe -ErrorAction Stop
-              & $winget.Source install --source winget --exact `
-                  --id Microsoft.WindowsWDK.10.0.28000 `
-                  --accept-package-agreements --accept-source-agreements `
-                  --silent --disable-interactivity
-              if ($LASTEXITCODE -ne 0) {
-                  throw "WDK WinGet installation failed with exit code $LASTEXITCODE."
-              }
-              $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
-                  -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
-                  Select-Object -First 1
+              & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) { throw "WDK WinGet installation failed with exit code $LASTEXITCODE." }
+              $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           }
           if (-not $inf2cat) { throw 'Full WDK installed but Inf2Cat.exe is still unavailable.' }
           Write-Host "Inf2Cat: $($inf2cat.FullName)"
 
-      - name: WDK Release build and package validation
+      - name: Ensure NSIS
+        timeout-minutes: 5
         shell: powershell
         run: |
-          .\windows\Build-And-Validate.ps1 -Configuration Release
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')) -and -not (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'))) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NSIS install failed with exit code $LASTEXITCODE." }
+          }
 
-      - name: Upload validation report
+      - name: Build, analyse, sign, verify and assemble installer
+        timeout-minutes: 25
+        shell: powershell
+        run: |
+          .\windows\Build-ExperimentalSetup.ps1
+          $setup = 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
+          $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
+          if ($version -ne '0.9.3.0') { throw "Installer version mismatch: expected 0.9.3.0, found '$version'." }
+          $driverVer = Get-Content -LiteralPath 'release\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
+          if (($driverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Staged INF version mismatch: '$driverVer'." }
+          Write-Host "Installer SHA-256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash)"
+
+      - name: Upload package evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: extfs-wdk-validation
+          name: extfs-093-wdk-package
           path: |
+            ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe
             release/driver/build-report.txt
             release/driver/extfs.inf
           if-no-files-found: ignore
