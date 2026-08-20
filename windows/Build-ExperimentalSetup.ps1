@@ -162,6 +162,14 @@ try {
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash
 $catHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash
+$reportPath = Join-Path $release 'build-report.txt'
+if (Test-Path -LiteralPath $reportPath) {
+    Add-Content -LiteralPath $reportPath -Encoding UTF8 -Value @(
+        "FinalSignedDriverSHA256: $hash"
+        "FinalSignedCatalogSHA256: $catHash"
+        "CatalogMembershipVerified: True"
+    )
+}
 Write-Host ''
 Write-Host 'Experimental package completed.'
 Write-Host "Signed driver SHA-256: $hash"

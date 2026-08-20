@@ -212,7 +212,7 @@ Write-Host 'Running InfVerif in Windows Driver mode against the staged package..
 & $infverif /w /v $stagedInf
 if ($LASTEXITCODE -ne 0) { throw "InfVerif failed with exit code $LASTEXITCODE." }
 
-# Generate the catalog explicitly after staging the final SYS and stamped INF.
+# Generate the catalog explicitly after staging the final SYS and release-controlled INF.
 # This avoids relying on Visual Studio's implicit signing certificate and makes
 # the catalog hashes correspond exactly to the package that our setup ships.
 $inf2catOs = '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
