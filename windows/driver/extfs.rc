@@ -16,12 +16,12 @@ BEGIN
         BEGIN
             VALUE "CompanyName", "Shannon Smith\0"
             VALUE "FileDescription", "ExtFS experimental ext2/ext3/ext4 filesystem driver\0"
-            VALUE "FileVersion", "0.9.2.0\0"
+            VALUE "FileVersion", "0.9.3.0\0"
             VALUE "InternalName", "extfs.sys\0"
             VALUE "LegalCopyright", "Copyright (c) 2026 Shannon Smith\0"
             VALUE "OriginalFilename", "extfs.sys\0"
             VALUE "ProductName", "ExtFS for Windows\0"
-            VALUE "ProductVersion", "0.9.2 audit-hardened ext4-depth1-extent-resize experimental\0"
+            VALUE "ProductVersion", "0.9.3 audit-hardened ext4-depth1-extent-resize experimental\0"
         END
     END
     BLOCK "VarFileInfo"

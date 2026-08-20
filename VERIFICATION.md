@@ -1,6 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Verification record — 0.9.2 forensic-audit hardening checkpoint
+# Verification record — 0.9.3 maintenance checkpoint
+
+## 0.9.3 Windows lifecycle/Common 1.9 maintenance
+
+0.9.3 retains the 0.9.2 filesystem mutation boundary and repairs Windows-adapter lifecycle/release defects found by the subsequent forensic audit: shared FCBs now track FILE_OBJECT lifetime and are reclaimed only after handles, FILE_OBJECT references and section/cache/image references have drained; removable-media verification now resynchronises `FILE_READ_ONLY_DEVICE`; stale 0.9.2/PE metadata is corrected; and Infiltratr Common 1.9.0 is pinned as the kernel-safe compiler-annotation dependency.
+
+Publication is gated on the permanent Portable ExtFS CI and Windows WDK CI passing on the final 0.9.3 source tree. Runtime Driver Verifier and destructive mounted-volume qualification remain separate manual tests.
 
 ## Established Windows baseline — 11 August 2026
 
@@ -27,4 +33,4 @@ Release remains gated on both workflows passing again on the final 0.9.2 branch 
 
 ## Deliberate non-claims
 
-Persistent regular-file mtime/ctime updates remain deferred with inode metadata semantics. Paging writes, volume lock ownership, dirty-journal replay, namespace mutation, multi-leaf/deeper ext4 extent trees and 64-bit/flex_bg allocation remain outside the 0.9.2 supported mutation boundary.
+Persistent regular-file mtime/ctime updates remain deferred with inode metadata semantics. Paging writes, volume lock ownership, dirty-journal replay, namespace mutation, multi-leaf/deeper ext4 extent trees and 64-bit/flex_bg allocation remain outside the 0.9.3 supported mutation boundary.

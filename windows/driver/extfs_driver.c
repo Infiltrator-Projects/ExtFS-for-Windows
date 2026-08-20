@@ -2239,7 +2239,7 @@ static NTSTATUS ExtfsMountVolume(PIRP Irp)
     if ((target->Characteristics & FILE_REMOVABLE_MEDIA) != 0U)
         volumeDevice->Characteristics |= FILE_REMOVABLE_MEDIA;
     /*
-     * 0.9.2 is deliberately resident for the entire boot: DriverEntry does not
+     * 0.9.3 is deliberately resident for the entire boot: DriverEntry does not
      * publish DriverUnload.  That conservative policy avoids any possibility of
      * executable code disappearing while a mounted VCB/FCB is still reachable.
      */
@@ -2429,6 +2429,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     ExtfsControlDevice->Flags &= ~DO_DEVICE_INITIALIZING;
     IoRegisterFileSystem(ExtfsControlDevice);
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-               "ExtFS: experimental ext4-depth1-extent-resize IFS 0.9.2 loaded\n");
+               "ExtFS: experimental ext4-depth1-extent-resize IFS 0.9.3 loaded\n");
     return STATUS_SUCCESS;
 }

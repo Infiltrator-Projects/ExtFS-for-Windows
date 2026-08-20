@@ -53,6 +53,8 @@
 - 0.9.2 ext2 crash-consistency barriers: dirty marker flush, mutation flush, clean-marker flush. **Implemented.**
 - 0.9.2 destructive real-image ext2/ext3/ext4 grow/shrink qualification followed by reopen and `e2fsck`. **Implemented in CI; qualification result recorded in `VERIFICATION.md`.**
 - 0.9.2 Windows WDK + Code Analysis CI path. **Implemented; qualification result recorded in `VERIFICATION.md`.**
+- 0.9.3 Windows FCB lifetime reclamation and removable-media read-only-state resynchronisation. **Implemented.**
+- 0.9.3 Infiltratr Common 1.9.0 kernel-safe annotation dependency and release-metadata cleanup. **Implemented.**
 
 ## 0.10 — general ext4 extent allocation
 

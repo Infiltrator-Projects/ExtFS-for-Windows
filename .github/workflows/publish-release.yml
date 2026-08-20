@@ -1,0 +1,131 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Publish release package
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  publish-v093:
+    if: startsWith(github.event.head_commit.message, 'Release ExtFS 0.9.3')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Locate NuGet
+        shell: powershell
+        run: |
+          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+          if (-not $nuget) {
+              choco install nuget.commandline -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
+              $nuget = Get-Command nuget.exe -ErrorAction Stop
+          }
+          Write-Host "NuGet: $($nuget.Source)"
+
+      - name: Ensure full WDK validation tools
+        shell: powershell
+        run: |
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
+              -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
+              Select-Object -First 1
+          if (-not $inf2cat) {
+              $winget = Get-Command winget.exe -ErrorAction Stop
+              & $winget.Source install --source winget --exact `
+                  --id Microsoft.WindowsWDK.10.0.28000 `
+                  --accept-package-agreements --accept-source-agreements `
+                  --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) {
+                  throw "WDK WinGet installation failed with exit code $LASTEXITCODE."
+              }
+              $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" `
+                  -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+          }
+          if (-not $inf2cat) { throw 'Full WDK installed but Inf2Cat.exe is still unavailable.' }
+          Write-Host "Inf2Cat: $($inf2cat.FullName)"
+
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          $makensis = Get-Command makensis.exe -ErrorAction SilentlyContinue
+          if (-not $makensis -and
+              -not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')) -and
+              -not (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'))) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NSIS install failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Build and test-sign 0.9.3 installer
+        shell: powershell
+        run: |
+          .\windows\Build-ExperimentalSetup.ps1
+          $setup = Join-Path $PWD 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer was not produced: $setup" }
+          $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
+          if ($version -ne '0.9.3.0') { throw "Installer version mismatch: expected 0.9.3.0, found '$version'." }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
+          Write-Host "Installer SHA-256: $hash"
+          "EXTFS_SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Publish GitHub Release v0.9.3
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Release asset missing: $setup" }
+          & gh release view v0.9.3 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Release v0.9.3 already exists; refusing to overwrite an existing published release.' }
+
+          $notes = @"
+          ExtFS for Windows 0.9.3 is the Windows-lifecycle/Common-1.9 maintenance release on the 0.9.2 audit-hardened filesystem feature boundary.
+
+          Changes in this release:
+          - fixes shared FCB lifetime reclamation with FILE_OBJECT and live-section safeguards;
+          - resynchronises removable-media FILE_READ_ONLY_DEVICE state after verification;
+          - corrects stale driver/package version metadata;
+          - pins Infiltratr Common 1.9.0 (commit a65b279b40682791f2cfefb4d9bdc274790b0c77) as the kernel-safe shared compiler-annotation dependency;
+          - retains the existing conservative ext2/ext3/ext4 mutation boundary.
+
+          This installer is development/test signed and remains experimental. Use it only on disposable/test Windows systems and backed-up test volumes.
+
+          Installer SHA-256: $env:EXTFS_SETUP_SHA256
+          "@
+          Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
+
+          & gh release create v0.9.3 $setup `
+              --repo $env:GITHUB_REPOSITORY `
+              --target $env:GITHUB_SHA `
+              --title 'ExtFS for Windows 0.9.3' `
+              --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
+
+          $json = & gh release view v0.9.3 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to verify the newly created GitHub release.' }
+          $release = $json | ConvertFrom-Json
+          if ($release.tagName -ne 'v0.9.3' -or $release.name -ne 'ExtFS for Windows 0.9.3' -or
+              $release.isDraft -or $release.isPrerelease) {
+              throw 'Published release metadata did not match the requested final release.'
+          }
+          $assetNames = @($release.assets | ForEach-Object name)
+          if ($assetNames -notcontains $setup) {
+              throw "Published release does not contain expected installer asset '$setup'."
+          }
+          Write-Host "Published and verified v0.9.3 with asset $setup"
+
+      - name: Remove merged maintenance branch
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          & gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/forensic-fix-common19"
+          if ($LASTEXITCODE -ne 0) { throw "Failed to delete merged branch forensic-fix-common19." }
+          Write-Host 'Deleted forensic-fix-common19; main is the only project branch.'

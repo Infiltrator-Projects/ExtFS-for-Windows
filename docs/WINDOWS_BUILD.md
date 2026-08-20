@@ -2,7 +2,7 @@
 
 # Windows build
 
-ExtFS 0.9.2 is the forensic-audit hardening release of the bounded depth-1 ext4 extent-tree checkpoint. The established 0.6.0 Windows baseline completed both the WDK Release build and Driver Code Analysis with 0 warnings / 0 errors. Development continued through 0.7.0, 0.8.0 and 0.9.0 without independent Windows qualification, so 0.9.2 must be qualified from its own source before Windows build quality is claimed.
+ExtFS 0.9.3 is the Windows-lifecycle/Common-1.9 maintenance release on the bounded depth-1 ext4 extent-tree feature boundary established and audit-qualified in 0.9.2. The filesystem mutation boundary is unchanged; 0.9.3 must pass the permanent portable and Windows WDK gates from its own source before publication.
 
 Use Visual Studio/WDK and NSIS, or run the supplied repository build wrapper:
 
@@ -14,11 +14,11 @@ The build restores the pinned Microsoft WDK/SDK NuGet packages, compiles the x64
 
 Expected setup file:
 
-`ExtFS-for-Windows-0.9.2-experimental-x64-setup.exe`
+`ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe`
 
 The package is development/test signed. It is not a production-signed driver. See `VERIFICATION.md` for the exact current WDK/CI/runtime qualification state.
 
-0.9.2 routes `IRP_MJ_WRITE` extension and `FileEndOfFileInformation` resize to:
+0.9.3 routes `IRP_MJ_WRITE` extension and `FileEndOfFileInformation` resize to:
 
 - ext2: direct unjournaled allocator/resizer with explicit dirty/mutation/clean durability barriers;
 - ext3: bounded direct-file JBD2 allocator/resizer;

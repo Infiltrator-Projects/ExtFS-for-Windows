@@ -1,8 +1,8 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# Feature support in 0.9.2
+# Feature support in 0.9.3
 
-0.9.2 hardens durability and qualification without expanding the supported filesystem feature boundary from 0.9.1.
+0.9.3 retains the 0.9.2 filesystem feature boundary while hardening Windows adapter lifetime/media-state handling and adopting Infiltratr Common 1.9.0.
 
 | Capability | Status | Boundary |
 |---|---|---|
