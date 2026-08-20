@@ -7,6 +7,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+$packagesDir = Join-Path $root 'packages'
 $release = Join-Path $root 'release\driver'
 $driver = Join-Path $release 'extfs.sys'
 $inf = Join-Path $release 'extfs.inf'
@@ -18,14 +19,22 @@ function Find-WindowsKitTool {
     param([Parameter(Mandatory)][string]$Name)
     $command = Get-Command $Name -ErrorAction SilentlyContinue
     if ($command) { return $command.Source }
-    $kits = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10'
-    $candidate = Get-ChildItem -LiteralPath $kits -Filter $Name -File -Recurse `
-        -ErrorAction SilentlyContinue |
-        Where-Object FullName -Match '\\x64\\' |
-        Sort-Object FullName -Descending |
-        Select-Object -First 1
-    if (-not $candidate) { throw "$Name was not found in the installed Windows Kits." }
-    return $candidate.FullName
+
+    foreach ($searchRoot in @(
+        $packagesDir,
+        (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10')
+    )) {
+        if (-not (Test-Path -LiteralPath $searchRoot)) { continue }
+        $candidates = @(Get-ChildItem -LiteralPath $searchRoot -Filter $Name -File -Recurse `
+            -ErrorAction SilentlyContinue | Sort-Object FullName -Descending)
+        if ($candidates.Count -eq 0) { continue }
+        $candidate = $candidates |
+            Where-Object FullName -Match '\\x64\\' |
+            Select-Object -First 1
+        if (-not $candidate) { $candidate = $candidates | Select-Object -First 1 }
+        if ($candidate) { return $candidate.FullName }
+    }
+    throw "$Name was not found in the restored WDK packages or installed Windows Kits."
 }
 
 function Find-MakeNSIS {
@@ -40,9 +49,69 @@ function Find-MakeNSIS {
     throw 'makensis.exe was not found. Install NSIS to build the setup executable.'
 }
 
+function Invoke-BoundedSignatureInspection {
+    param(
+        [Parameter(Mandatory)][string]$Tool,
+        [Parameter(Mandatory)][string]$File,
+        [Parameter(Mandatory)][string]$ExpectedThumbprint,
+        [string]$Catalog,
+        [ValidateRange(5, 300)][int]$TimeoutSeconds = 45
+    )
+
+    $job = Start-Job -ScriptBlock {
+        param($Verifier, $Target, $PackageCatalog)
+        $signerThumbprint = $null
+        if (-not $PackageCatalog) {
+            $signature = Get-AuthenticodeSignature -LiteralPath $Target
+            if ($signature.SignerCertificate) {
+                $signerThumbprint = $signature.SignerCertificate.Thumbprint
+            }
+        }
+        if ($PackageCatalog) {
+            $output = @(& $Verifier verify /v /pa /c $PackageCatalog $Target 2>&1)
+        } else {
+            $output = @(& $Verifier verify /v /pa $Target 2>&1)
+        }
+        [pscustomobject]@{
+            ExitCode = $LASTEXITCODE
+            Output = ($output | Out-String)
+            SignerThumbprint = $signerThumbprint
+        }
+    } -ArgumentList $Tool, $File, $Catalog
+    try {
+        if (-not (Wait-Job -Job $job -Timeout $TimeoutSeconds)) {
+            Stop-Job -Job $job -ErrorAction SilentlyContinue
+            throw "Timed out after $TimeoutSeconds seconds inspecting $File."
+        }
+        $result = Receive-Job -Job $job -Wait -ErrorAction Stop
+    } finally {
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue
+    }
+
+    Write-Host $result.Output
+    if (-not $Catalog -and
+        $result.SignerThumbprint -ne $ExpectedThumbprint) {
+        throw "Signer thumbprint mismatch for $File; found '$($result.SignerThumbprint)'."
+    }
+    if ($result.ExitCode -eq 0) { return }
+
+    # The package is intentionally self-signed. An untrusted-root result is
+    # acceptable only after SignTool has validated the file/signature/catalog
+    # far enough to reach chain policy. Every other nonzero result remains fatal.
+    $untrustedRoot = (
+        $result.Output -match 'terminated in a root' -and
+        $result.Output -match 'certificate which is not trusted'
+    )
+    if (-not $untrustedRoot) {
+        throw "Signature inspection failed for $File with exit code $($result.ExitCode)."
+    }
+    Write-Host "Signature and hash inspection reached the expected self-signed trust boundary for $File."
+}
+
 & $buildScript -Configuration Release -SkipCodeAnalysis:$SkipCodeAnalysis
 
 $signtool = Find-WindowsKitTool -Name 'signtool.exe'
+$inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe'
 $makensis = Find-MakeNSIS
 
 foreach ($required in @($driver, $inf, $catalog)) {
@@ -66,31 +135,40 @@ if (-not $cert) {
     Export-Certificate -Cert $cert -FilePath $certificateFile -Force | Out-Null
 }
 
-Write-Host "Signing the ExtFS driver package with test certificate $($cert.Thumbprint)..."
-foreach ($file in @($driver, $catalog)) {
-    Write-Host "  Signing $file"
-    & $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $file
-    if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $file with exit code $LASTEXITCODE." }
+$unsignedDriverHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash
+Write-Host "Signing the ExtFS driver with test certificate $($cert.Thumbprint)..."
+& $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $driver
+if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $driver with exit code $LASTEXITCODE." }
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash -eq $unsignedDriverHash) {
+    throw "Signing did not change $driver; refusing to package an unsigned driver."
 }
 
-# A self-signed development certificate is not normally a trusted root on the
-# build host.  Trust its public half in CurrentUser only for verification, then
-# remove that temporary trust entry before returning.
-$temporaryRoot = $null
-try {
-    $temporaryRoot = Import-Certificate -FilePath $certificateFile `
-        -CertStoreLocation 'Cert:\CurrentUser\Root'
-    foreach ($file in @($driver, $catalog)) {
-        & $signtool verify /v /pa $file
-        if ($LASTEXITCODE -ne 0) { throw "SignTool verification failed for $file with exit code $LASTEXITCODE." }
-    }
-} finally {
-    if ($temporaryRoot) {
-        Get-ChildItem Cert:\CurrentUser\Root |
-            Where-Object Thumbprint -eq $cert.Thumbprint |
-            Remove-Item -Force -ErrorAction SilentlyContinue
-    }
+# The catalog must hash the final signed SYS. Regenerate it after embedded
+# signing, then sign the catalog itself.
+Remove-Item -LiteralPath $catalog -Force
+$inf2catOs = '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
+& $inf2cat "/driver:$release" "/os:$inf2catOs" /uselocaltime
+if ($LASTEXITCODE -ne 0) { throw "Inf2Cat regeneration failed with exit code $LASTEXITCODE." }
+if (-not (Test-Path -LiteralPath $catalog)) { throw "Inf2Cat did not regenerate $catalog." }
+
+$unsignedCatalogHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash
+Write-Host "Signing the regenerated ExtFS catalog..."
+& $signtool sign /v /fd SHA256 /sha1 $cert.Thumbprint /s My $catalog
+if ($LASTEXITCODE -ne 0) { throw "SignTool signing failed for $catalog with exit code $LASTEXITCODE." }
+if ((Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash -eq $unsignedCatalogHash) {
+    throw "Signing did not change $catalog; refusing to package an unsigned catalog."
 }
+
+# Inspect embedded signatures and catalog membership without mutating either
+# the user or machine trust store. Each inspection is isolated and bounded.
+foreach ($file in @($driver, $catalog)) {
+    Invoke-BoundedSignatureInspection -Tool $signtool -File $file `
+        -ExpectedThumbprint $cert.Thumbprint
+}
+Invoke-BoundedSignatureInspection -Tool $signtool -File $driver `
+    -Catalog $catalog -ExpectedThumbprint $cert.Thumbprint
+Invoke-BoundedSignatureInspection -Tool $signtool -File $inf `
+    -Catalog $catalog -ExpectedThumbprint $cert.Thumbprint
 
 $installerScript = Join-Path $PSScriptRoot 'installer\extfs-installer.nsi'
 Push-Location (Split-Path -Parent $installerScript)
@@ -106,6 +184,14 @@ try {
 
 $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash
 $catHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash
+$reportPath = Join-Path $release 'build-report.txt'
+if (Test-Path -LiteralPath $reportPath) {
+    Add-Content -LiteralPath $reportPath -Encoding UTF8 -Value @(
+        "FinalSignedDriverSHA256: $hash"
+        "FinalSignedCatalogSHA256: $catHash"
+        "CatalogMembershipVerified: True"
+    )
+}
 Write-Host ''
 Write-Host 'Experimental package completed.'
 Write-Host "Signed driver SHA-256: $hash"

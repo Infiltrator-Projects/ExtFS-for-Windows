@@ -15,6 +15,8 @@ $release = Join-Path $root 'release\driver'
 $packagesConfig = Join-Path $root 'packages.config'
 $packagesDir = Join-Path $root 'packages'
 $wdkNuGetVersion = '10.0.28000.2526'
+$driverVersion = '0.9.3.0'
+$driverDate = '08/20/2026'
 $commonVersionFile = Join-Path $root 'third_party\infiltratr-common\VERSION'
 if (-not (Test-Path -LiteralPath $commonVersionFile)) {
     throw 'Infiltratr Common 1.9.0 is missing. Clone ExtFS with --recurse-submodules.'
@@ -185,15 +187,15 @@ if (-not $driver) {
     throw 'The build completed but extfs.sys could not be located under windows\driver.'
 }
 
-# StampInf writes the package INF into the configuration output directory.  Stage
-# that exact INF rather than the source template so validation/catalog hashing
-# describes precisely the files that will be shipped together.
-$builtInf = Get-ChildItem -LiteralPath $driverRoot -Filter extfs.inf -File -Recurse |
-    Where-Object FullName -Match "\\$Configuration\\" |
-    Sort-Object LastWriteTimeUtc -Descending |
+# The checked-in INF is the release manifest. WDK's build output may carry a
+# development timestamp/version, so never stage that generated copy.
+$driverVerLine = Get-Content -LiteralPath $inf |
+    Where-Object { $_ -match '^\s*DriverVer\s*=' } |
     Select-Object -First 1
-if (-not $builtInf) {
-    throw 'The build completed but the stamped extfs.inf could not be located under windows\driver.'
+$normalisedDriverVer = $driverVerLine -replace '\s', ''
+$expectedDriverVer = "DriverVer=$driverDate,$driverVersion"
+if ($normalisedDriverVer -ne $expectedDriverVer) {
+    throw "Source INF version mismatch: expected '$expectedDriverVer', found '$driverVerLine'."
 }
 
 if (Test-Path -LiteralPath $release) {
@@ -204,13 +206,13 @@ $stagedDriver = Join-Path $release 'extfs.sys'
 $stagedInf = Join-Path $release 'extfs.inf'
 $stagedCatalog = Join-Path $release 'extfs.cat'
 Copy-Item -LiteralPath $driver.FullName -Destination $stagedDriver -Force
-Copy-Item -LiteralPath $builtInf.FullName -Destination $stagedInf -Force
+Copy-Item -LiteralPath $inf -Destination $stagedInf -Force
 
 Write-Host 'Running InfVerif in Windows Driver mode against the staged package...'
 & $infverif /w /v $stagedInf
 if ($LASTEXITCODE -ne 0) { throw "InfVerif failed with exit code $LASTEXITCODE." }
 
-# Generate the catalog explicitly after staging the final SYS and stamped INF.
+# Generate the catalog explicitly after staging the final SYS and release-controlled INF.
 # This avoids relying on Visual Studio's implicit signing certificate and makes
 # the catalog hashes correspond exactly to the package that our setup ships.
 $inf2catOs = '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
@@ -233,6 +235,7 @@ $report = @(
     "InfVerif: $infverif"
     "Inf2Cat: $inf2cat"
     "CodeAnalysis: $(-not $SkipCodeAnalysis)"
+    "DriverVer: $driverDate,$driverVersion"
     "Driver: $stagedDriver"
     "DriverSHA256: $hash"
     "CatalogSHA256: $catHash"
