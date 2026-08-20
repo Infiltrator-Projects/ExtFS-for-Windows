@@ -174,8 +174,8 @@ static PEXTFS_CCB ExtfsCcbFromFile(PFILE_OBJECT FileObject)
     return ccb->Signature == EXTFS_CCB_SIGNATURE ? ccb : NULL;
 }
 
-/* FCBs are shared by inode and cached for the lifetime of a mounted volume.
- * The VCB resource serialises cache membership and Windows SHARE_ACCESS updates. */
+/* FCBs are shared by inode while FILE_OBJECT references remain. The VCB
+ * resource serialises cache membership, lifetime and Windows SHARE_ACCESS updates. */
 static PEXTFS_FCB ExtfsFindFcbLocked(PEXTFS_VCB Vcb,
                                      const extfs_inode *Inode,
                                      BOOLEAN VolumeOpen)
@@ -254,7 +254,8 @@ static NTSTATUS ExtfsAcquireFcb(PEXTFS_VCB Vcb,
     NTSTATUS status = STATUS_SUCCESS;
 
     candidate = (PEXTFS_FCB)ExtfsAllocate(sizeof(*candidate));
-    if (candidate == NULL) return STATUS_INSUFFICIENT_RESOURCES;
+    if (INFILTRATR_UNLIKELY(candidate == NULL))
+        return STATUS_INSUFFICIENT_RESOURCES;
     ExtfsZeroMemory(candidate, sizeof(*candidate));
     candidate->Signature = EXTFS_FCB_SIGNATURE;
     candidate->Vcb = Vcb;
@@ -271,16 +272,23 @@ static NTSTATUS ExtfsAcquireFcb(PEXTFS_VCB Vcb,
     if (fcb != NULL) {
         status = IoCheckShareAccess(DesiredAccess, ShareAccess, FileObject,
                                     &fcb->ShareAccess, TRUE);
-        if (NT_SUCCESS(status)) ++fcb->HandleCount;
+        if (NT_SUCCESS(status)) {
+            ++fcb->HandleCount;
+            ++fcb->FileObjectCount;
+        }
     } else {
         IoSetShareAccess(DesiredAccess, ShareAccess, FileObject,
                          &candidate->ShareAccess);
         candidate->HandleCount = 1;
+        candidate->FileObjectCount = 1;
         InsertTailList(&Vcb->FcbList, &candidate->Links);
         fcb = candidate;
         candidate = NULL;
     }
-    if (NT_SUCCESS(status)) InterlockedIncrement(&Vcb->OpenHandleCount);
+    if (NT_SUCCESS(status)) {
+        InterlockedIncrement(&Vcb->OpenHandleCount);
+        InterlockedIncrement(&Vcb->FileObjectCount);
+    }
     ExtfsReleaseFcbList(Vcb);
 
     if (candidate != NULL) {
@@ -304,6 +312,37 @@ static VOID ExtfsCleanupFileObject(PFILE_OBJECT FileObject)
     ccb->CleanupComplete = TRUE;
     InterlockedDecrement(&fcb->Vcb->OpenHandleCount);
     ExtfsReleaseFcbList(fcb->Vcb);
+}
+
+/* Drop the FILE_OBJECT lifetime reference at CLOSE. The FCB remains shared
+ * while another FILE_OBJECT still points at it, even if every handle has already
+ * completed CLEANUP. This prevents stale FsContext/SectionObjectPointer references
+ * while avoiding unbounded per-inode nonpaged-pool growth across a long mount. */
+static VOID ExtfsReleaseFcbReference(PEXTFS_FCB Fcb)
+{
+    PEXTFS_VCB vcb;
+    BOOLEAN freeFcb = FALSE;
+
+    if (INFILTRATR_UNLIKELY(Fcb == NULL || Fcb->Vcb == NULL)) return;
+    vcb = Fcb->Vcb;
+    ExtfsAcquireFcbList(vcb);
+    if (Fcb->FileObjectCount > 0) --Fcb->FileObjectCount;
+    InterlockedDecrement(&vcb->FileObjectCount);
+    if (Fcb->FileObjectCount == 0 && Fcb->HandleCount == 0 &&
+        Fcb->SectionObjectPointers.DataSectionObject == NULL &&
+        Fcb->SectionObjectPointers.SharedCacheMap == NULL &&
+        Fcb->SectionObjectPointers.ImageSectionObject == NULL) {
+        RemoveEntryList(&Fcb->Links);
+        InitializeListHead(&Fcb->Links);
+        Fcb->Signature = 0U;
+        freeFcb = TRUE;
+    }
+    ExtfsReleaseFcbList(vcb);
+
+    if (freeFcb) {
+        ExDeleteResourceLite(&Fcb->DataResource);
+        ExFreePool(Fcb);
+    }
 }
 
 static VOID ExtfsFreeFcbCache(PEXTFS_VCB Vcb)
@@ -529,7 +568,14 @@ static int ExtfsTimeCore(void *User, extfs_u64 *Seconds,
     ULONGLONG ticks;
     UNREFERENCED_PARAMETER(User);
     if (Seconds == NULL || Nanoseconds == NULL) return -1;
+#if defined(_MSC_VER)
     KeQuerySystemTimePrecise(&now);
+#else
+    /* MinGW-w64 DDK headers do not currently declare the precise routine.
+     * Keep the authoritative WDK build on KeQuerySystemTimePrecise while the
+     * non-authoritative cross-build uses the universally declared fallback. */
+    KeQuerySystemTime(&now);
+#endif
     if (now.QuadPart < 116444736000000000LL) return -1;
     ticks = (ULONGLONG)(now.QuadPart - 116444736000000000LL);
     *Seconds = (extfs_u64)(ticks / 10000000ULL);
@@ -1070,6 +1116,7 @@ static NTSTATUS ExtfsLockBuffer(PIRP Irp, ULONG Length,
         return GetExceptionCode();
     }
 #else
+    UNREFERENCED_PARAMETER(Operation);
     /* MinGW cannot express the kernel SEH required around MmProbeAndLockPages.
      * Never make an unguarded probe: normal filesystem I/O arrives through an
      * MDL or system buffer, and an unexpected METHOD_NEITHER user pointer is
@@ -1270,15 +1317,18 @@ NTSTATUS ExtfsDispatchFlushBuffers(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     return ExtfsCompleteIrp(Irp, status, 0U);
 }
 
-/* CLOSE frees only the per-handle CCB.  Shared FCBs remain cached by the VCB. */
+/* CLOSE releases the per-handle CCB and the FILE_OBJECT reference on the
+ * shared FCB. The final CLOSE reclaims the FCB once CLEANUP has removed the
+ * last share-access handle. */
 NTSTATUS ExtfsDispatchClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PFILE_OBJECT fileObject = IoGetCurrentIrpStackLocation(Irp)->FileObject;
+    PEXTFS_FCB fcb = ExtfsFcbFromFile(fileObject);
     PEXTFS_CCB ccb = ExtfsCcbFromFile(fileObject);
     (void)DeviceObject;
     if (fileObject != NULL) {
         /* The I/O manager sends CLEANUP in the handle-closing thread context;
-         * share-access removal belongs there.  CLOSE can run in a different
+         * share-access removal belongs there. CLOSE can run in a different
          * context, so it only tears down the per-file-object pointers/CCB. */
         if (ccb != NULL && !ccb->CleanupComplete) {
             DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_ERROR_LEVEL,
@@ -1292,6 +1342,7 @@ NTSTATUS ExtfsDispatchClose(PDEVICE_OBJECT DeviceObject, PIRP Irp)
         ccb->Signature = 0U;
         ExFreePool(ccb);
     }
+    if (fcb != NULL) ExtfsReleaseFcbReference(fcb);
     return ExtfsCompleteIrp(Irp, STATUS_SUCCESS, 0U);
 }
 
@@ -2188,7 +2239,7 @@ static NTSTATUS ExtfsMountVolume(PIRP Irp)
     if ((target->Characteristics & FILE_REMOVABLE_MEDIA) != 0U)
         volumeDevice->Characteristics |= FILE_REMOVABLE_MEDIA;
     /*
-     * 0.9.1 is deliberately resident for the entire boot: DriverEntry does not
+     * 0.9.2 is deliberately resident for the entire boot: DriverEntry does not
      * publish DriverUnload.  That conservative policy avoids any possibility of
      * executable code disappearing while a mounted VCB/FCB is still reachable.
      */
@@ -2247,7 +2298,7 @@ static NTSTATUS ExtfsVerifyMountedVolume(PEXTFS_VCB Vcb)
      * Do not validate such handles against stale inode snapshots; only refresh
      * the volume after all opens have drained, then discard the inert FCB cache. */
     ExtfsAcquireFcbList(Vcb);
-    if (Vcb->OpenHandleCount != 0) {
+    if (Vcb->OpenHandleCount != 0 || Vcb->FileObjectCount != 0) {
         ExtfsReleaseFcbList(Vcb);
         return STATUS_WRONG_VOLUME;
     }
@@ -2256,6 +2307,12 @@ static NTSTATUS ExtfsVerifyMountedVolume(PEXTFS_VCB Vcb)
     Vcb->WriteEnabled =
         ExtfsDeviceIsWritable(Vcb->TargetDeviceObject) &&
         extfs_write_assess(&Vcb->Volume, &risks) == EXTFS_OK ? TRUE : FALSE;
+    if (Vcb->VolumeDeviceObject != NULL) {
+        if (Vcb->WriteEnabled)
+            Vcb->VolumeDeviceObject->Characteristics &= ~FILE_READ_ONLY_DEVICE;
+        else
+            Vcb->VolumeDeviceObject->Characteristics |= FILE_READ_ONLY_DEVICE;
+    }
     ExtfsReleaseFcbList(Vcb);
     Vcb->Vpb->RealDevice->Flags &= ~DO_VERIFY_VOLUME;
     return STATUS_SUCCESS;
@@ -2372,6 +2429,6 @@ NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegistryPath)
     ExtfsControlDevice->Flags &= ~DO_DEVICE_INITIALIZING;
     IoRegisterFileSystem(ExtfsControlDevice);
     DbgPrintEx(DPFLTR_IHVDRIVER_ID, DPFLTR_INFO_LEVEL,
-               "ExtFS: experimental ext4-depth1-extent-resize IFS 0.9.1 loaded\n");
+               "ExtFS: experimental ext4-depth1-extent-resize IFS 0.9.2 loaded\n");
     return STATUS_SUCCESS;
 }

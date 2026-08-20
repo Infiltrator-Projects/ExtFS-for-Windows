@@ -5,6 +5,7 @@
 #include <ntifs.h>
 #include <ntdddisk.h>
 #include "extfs/extfs.h"
+#include "infiltratr/compiler.h"
 
 #define EXTFS_POOL_TAG 0x53465845U
 #define EXTFS_VCB_SIGNATURE 0x42435645U /* EVCB */
@@ -22,7 +23,8 @@ typedef struct _EXTFS_DISK_READER {
 /*
  * Per-mounted-volume state.  The I/O manager owns the device object containing
  * this extension; the VCB owns the shared per-inode FCB cache, while each FCB
- * references its containing VCB.  OpenHandleCount tracks live file handles.
+ * references its containing VCB. OpenHandleCount tracks handles before CLEANUP;
+ * FileObjectCount tracks FILE_OBJECT references until CLOSE.
  */
 typedef struct _EXTFS_VCB {
     ULONG Signature;
@@ -36,13 +38,14 @@ typedef struct _EXTFS_VCB {
     ERESOURCE MetadataResource;
     LIST_ENTRY FcbList;
     volatile LONG OpenHandleCount;
+    volatile LONG FileObjectCount;
     BOOLEAN Dismounted;
     BOOLEAN WriteEnabled;
 } EXTFS_VCB, *PEXTFS_VCB;
 
-/* Shared per-inode state.  Every FILE_OBJECT for the same inode points at the
+/* Shared per-inode state. Every FILE_OBJECT for the same inode points at the
  * same FCB so Windows share access and section-object state remain coherent.
- * FCBs are cached until the containing volume is torn down. */
+ * FCBs are reclaimed after the final FILE_OBJECT closes. */
 typedef struct _EXTFS_FCB {
     ULONG Signature;
     LIST_ENTRY Links;
@@ -52,6 +55,7 @@ typedef struct _EXTFS_FCB {
     ERESOURCE DataResource;
     SHARE_ACCESS ShareAccess;
     LONG HandleCount;
+    LONG FileObjectCount;
     BOOLEAN VolumeOpen;
 } EXTFS_FCB, *PEXTFS_FCB;
 
