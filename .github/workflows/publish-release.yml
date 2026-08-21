@@ -125,15 +125,55 @@ jobs:
           if ($assets.Count -ne 1) { throw "Expected exactly one installer asset '$setup'." }
           Write-Host "Published and verified v0.9.3 with $setup"
 
-      - name: Clean obsolete publication branches
-        if: success()
-        timeout-minutes: 5
-        shell: powershell
+  cleanup-v093:
+    if: >-
+      always() &&
+      (
+        (startsWith(github.event.head_commit.message, 'Publish ExtFS 0.9.3 recovery') && needs.publish-v093.result == 'success') ||
+        startsWith(github.event.head_commit.message, 'Finalize ExtFS 0.9.3 recovery')
+      )
+    needs: publish-v093
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Verify release and clean obsolete publication branches
+        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          & gh pr close 5 --repo $env:GITHUB_REPOSITORY --comment 'Superseded by the validated ExtFS 0.9.3 recovery release.' *> $null
-          foreach ($branch in @('forensic-fix-common19', 'release-093-fast-publish', 'release-093-observable', 'codex/extfs-093-recovery')) {
-              & gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/$branch" *> $null
-              if ($LASTEXITCODE -eq 0) { Write-Host "Deleted obsolete branch $branch" } else { Write-Host "Branch $branch already absent or retained by repository policy." }
+          $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $release = Invoke-RestMethod -Uri "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/v0.9.3" -Headers $headers -Method Get
+          $setup = 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          $assets = @($release.assets | Where-Object name -eq $setup)
+          if ($release.draft -or $release.prerelease -or $assets.Count -ne 1) {
+              throw 'Refusing cleanup because the final v0.9.3 installer release was not verified.'
+          }
+
+          foreach ($branch in @(
+              'forensic-fix-common19',
+              'release-093-fast-publish',
+              'release-093-observable',
+              'codex/extfs-093-recovery',
+              'codex/extfs-093-publish-probe-fix',
+              'codex/extfs-093-cleanup'
+          )) {
+              $encodedBranch = [Uri]::EscapeDataString($branch)
+              $uri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/git/refs/heads/$encodedBranch"
+              try {
+                  Invoke-RestMethod -Uri $uri -Headers $headers -Method Delete
+                  Write-Host "Deleted obsolete branch $branch"
+              } catch {
+                  $status = [int]$_.Exception.Response.StatusCode
+                  if ($status -eq 404) {
+                      Write-Host "Branch $branch is already absent."
+                  } else {
+                      throw
+                  }
+              }
           }
