@@ -43,7 +43,7 @@
       <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><ExceptionHandling></ExceptionHandling>
       <PreprocessorDefinitions>DBG=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link><AdditionalDependencies>ntoskrnl.lib;hal.lib;wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>ntoskrnl.lib;hal.lib;wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies><AdditionalLibraryDirectories Condition="'$(Platform)'=='ARM64'">$(ExtfsArm64RuntimeDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories></Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)'=='Release'">
     <ClCompile>
@@ -51,7 +51,7 @@
       <WarningLevel>Level4</WarningLevel><TreatWarningAsError>true</TreatWarningAsError><ExceptionHandling></ExceptionHandling>
       <PreprocessorDefinitions>NDEBUG;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
-    <Link><AdditionalDependencies>ntoskrnl.lib;hal.lib;wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>ntoskrnl.lib;hal.lib;wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies><AdditionalLibraryDirectories Condition="'$(Platform)'=='ARM64'">$(ExtfsArm64RuntimeDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories></Link>
   </ItemDefinitionGroup>
   <ItemGroup><ClCompile Include="extfs_driver.c" /><ClCompile Include="..\..\core\extfs.c" /></ItemGroup>
   <ItemGroup><ClInclude Include="extfs_driver.h" /><ClInclude Include="..\..\include\extfs\extfs.h" /></ItemGroup>
@@ -61,6 +61,7 @@
     <Error Condition="'$(ConfigurationType)' != 'Driver'" Text="ExtFS must be built as a kernel Driver project; ConfigurationType=$(ConfigurationType)." />
     <Error Condition="'$(PlatformToolset)' != 'WindowsKernelModeDriver10.0'" Text="ExtFS requires the WindowsKernelModeDriver10.0 platform toolset; PlatformToolset=$(PlatformToolset)." />
     <Error Condition="'$(Platform)' != 'x64' and '$(Platform)' != 'ARM64'" Text="ExtFS supports only x64 and ARM64; Platform=$(Platform)." />
+    <Error Condition="'$(Platform)' == 'ARM64' and !Exists('$(ExtfsArm64RuntimeDir)\\arm64rt.lib')" Text="ARM64 runtime library was not located: $(ExtfsArm64RuntimeDir)\\arm64rt.lib." />
     <Error Condition="'$(KM_IncludePath)' == ''" Text="WDK kernel-mode properties are inactive. Restore the pinned architecture-specific Microsoft.Windows.WDK NuGet package." />
   </Target>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

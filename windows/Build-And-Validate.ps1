@@ -187,15 +187,34 @@ $msbuild = Find-MSBuild
 $infverif = Find-WindowsKitTool -Name 'InfVerif.exe' -RestoredPackages $packagesDir
 $inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe' -RestoredPackages $packagesDir
 
+$platformMsbuildArguments = @()
+if ($Platform -eq 'ARM64') {
+    $arm64Runtime = @($packagesDir, $env:VCToolsInstallDir) |
+        Where-Object { $_ -and (Test-Path -LiteralPath $_) } |
+        ForEach-Object {
+            Get-ChildItem -LiteralPath $_ -Filter 'arm64rt.lib' -File -Recurse -ErrorAction SilentlyContinue
+        } |
+        Where-Object FullName -Match '\\arm64\\' |
+        Sort-Object FullName -Descending |
+        Select-Object -First 1
+    if (-not $arm64Runtime) {
+        throw 'arm64rt.lib was not found in the restored WDK/SDK packages or Visual C++ ARM64 tools.'
+    }
+    $arm64RuntimeDirectory = Split-Path -Parent $arm64Runtime.FullName
+    $platformMsbuildArguments = @("/p:ExtfsArm64RuntimeDir=$arm64RuntimeDirectory")
+    Write-Host "ARM64 runtime library: $($arm64Runtime.FullName)"
+}
+
 Write-Host "WDK NuGet props: $wdkProps"
 Write-Host "Building ExtFS $Configuration $Platform with: $msbuild"
-& $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" "/p:Platform=$Platform"
+$buildArguments = @($solution, '/m', '/t:Clean,Build', "/p:Configuration=$Configuration", "/p:Platform=$Platform") + $platformMsbuildArguments
+& $msbuild @buildArguments
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE." }
 
 if (-not $SkipCodeAnalysis) {
     Write-Host 'Running WDK/Visual C++ driver Code Analysis...'
-    & $msbuild $project /m "/p:Configuration=$Configuration" "/p:Platform=$Platform" `
-        /p:RunCodeAnalysisOnce=True
+    $analysisArguments = @($project, '/m', "/p:Configuration=$Configuration", "/p:Platform=$Platform", '/p:RunCodeAnalysisOnce=True') + $platformMsbuildArguments
+    & $msbuild @analysisArguments
     if ($LASTEXITCODE -ne 0) { throw "Driver Code Analysis failed with exit code $LASTEXITCODE." }
 }
 
