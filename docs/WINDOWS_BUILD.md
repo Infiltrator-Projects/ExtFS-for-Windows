@@ -7,14 +7,18 @@ ExtFS 0.9.3 is the Windows-lifecycle/Common-1.9 maintenance release on the bound
 Use Visual Studio/WDK and NSIS, or run the supplied repository build wrapper:
 
 ```bat
-BUILD-EXTFS.cmd
+BUILD-EXTFS.cmd setup x64
+BUILD-EXTFS.cmd setup ARM64
 ```
 
-The build restores the pinned Microsoft WDK/SDK NuGet packages, compiles the x64 kernel driver with warnings as errors, runs Driver Code Analysis, validates the INF, generates the catalog, test-signs SYS/CAT and builds the NSIS package. The WDK validator can use tools from the restored pinned packages or an installed Windows Kit, which also permits the repository's Windows CI path to exercise the same build logic.
+The build restores the pinned Microsoft WDK/SDK NuGet packages, compiles the selected x64 or ARM64 kernel driver with warnings as errors, runs Driver Code Analysis, validates the INF, generates the catalog, test-signs SYS/CAT and builds the NSIS package. The WDK validator can use tools from the restored pinned packages or an installed Windows Kit, which also permits the repository's Windows CI path to exercise the same build logic.
 
-Expected setup file:
+Expected setup files:
 
-`ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe`
+- `ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe`
+- `ExtFS-for-Windows-0.9.3-experimental-arm64-setup.exe`
+
+The validator checks the PE machine field (`0x8664` for x64 or `0xAA64` for ARM64), architecture-specific INF catalog targets and the final installer architecture. Run `windows/test/Test-HostReadiness.ps1` before an ARM64 transition; see `ARM64_TESTING.md`.
 
 The package is development/test signed. It is not a production-signed driver. See `VERIFICATION.md` for the exact current WDK/CI/runtime qualification state.
 

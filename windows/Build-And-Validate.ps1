@@ -3,6 +3,8 @@
 param(
     [ValidateSet('Debug', 'Release')]
     [string]$Configuration = 'Release',
+    [ValidateSet('x64', 'ARM64')]
+    [string]$Platform = 'x64',
     [switch]$SkipCodeAnalysis
 )
 
@@ -15,6 +17,7 @@ $release = Join-Path $root 'release\driver'
 $packagesConfig = Join-Path $root 'packages.config'
 $packagesDir = Join-Path $root 'packages'
 $wdkNuGetVersion = '10.0.28000.2526'
+$wdkPackageName = if ($Platform -eq 'ARM64') { 'Microsoft.Windows.WDK.ARM64' } else { 'Microsoft.Windows.WDK.x64' }
 $driverVersion = '0.9.3.0'
 $driverDate = '08/20/2026'
 $commonVersionFile = Join-Path $root 'third_party\infiltratr-common\VERSION'
@@ -24,6 +27,23 @@ if (-not (Test-Path -LiteralPath $commonVersionFile)) {
 $commonVersion = (Get-Content -LiteralPath $commonVersionFile -Raw).Trim()
 if ($commonVersion -ne '1.9.0') {
     throw "ExtFS requires Infiltratr Common 1.9.0; found '$commonVersion'."
+}
+
+function Get-PortableExecutableMachine {
+    param([Parameter(Mandatory)][string]$Path)
+    $stream = [IO.File]::OpenRead($Path)
+    $reader = [IO.BinaryReader]::new($stream)
+    try {
+        if ($reader.ReadUInt16() -ne 0x5A4D) { throw "Not a PE image: $Path" }
+        $stream.Position = 0x3c
+        $peOffset = $reader.ReadInt32()
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) { throw "Invalid PE signature: $Path" }
+        return $reader.ReadUInt16()
+    } finally {
+        $reader.Dispose()
+        $stream.Dispose()
+    }
 }
 
 function Find-NuGet {
@@ -66,12 +86,13 @@ function Enter-VisualStudioDeveloperShell {
 
 function Add-WdkBuildToolsToPath {
     param([Parameter(Mandatory)][string]$RestoredPackages,
-          [Parameter(Mandatory)][string]$Version)
+          [Parameter(Mandatory)][string]$Version,
+          [Parameter(Mandatory)][string]$PackageName)
 
     # WDK MSBuild tasks launch helper programs such as StampInf through the
     # process search path.  Prefer the helper from the pinned WDK package so
     # that the executable version matches the headers/targets being built.
-    $wdkPackage = Join-Path $RestoredPackages "Microsoft.Windows.WDK.x64.$Version"
+    $wdkPackage = Join-Path $RestoredPackages "$PackageName.$Version"
     $stampinf = $null
     if (Test-Path -LiteralPath $wdkPackage) {
         $stampinf = Get-ChildItem -LiteralPath $wdkPackage -Filter 'stampinf.exe' -File -Recurse `
@@ -149,7 +170,7 @@ Write-Host "Restoring pinned Microsoft WDK/SDK NuGet packages ($wdkNuGetVersion)
 & $nuget restore $packagesConfig -PackagesDirectory $packagesDir -NonInteractive
 if ($LASTEXITCODE -ne 0) { throw "NuGet restore failed with exit code $LASTEXITCODE." }
 
-$wdkProps = Join-Path $packagesDir "Microsoft.Windows.WDK.x64.$wdkNuGetVersion\build\native\Microsoft.Windows.WDK.x64.props"
+$wdkProps = Join-Path $packagesDir "$wdkPackageName.$wdkNuGetVersion\build\native\$wdkPackageName.props"
 if (-not (Test-Path -LiteralPath $wdkProps)) {
     throw "WDK NuGet restore completed but the expected WDK build properties were not found: $wdkProps"
 }
@@ -160,31 +181,36 @@ if (-not (Test-Path -LiteralPath $wdkProps)) {
 # pinned WDK helper directory explicitly because tasks such as StampInf launch
 # their executable through PATH.
 Enter-VisualStudioDeveloperShell
-Add-WdkBuildToolsToPath -RestoredPackages $packagesDir -Version $wdkNuGetVersion
+Add-WdkBuildToolsToPath -RestoredPackages $packagesDir -Version $wdkNuGetVersion -PackageName $wdkPackageName
 
 $msbuild = Find-MSBuild
 $infverif = Find-WindowsKitTool -Name 'InfVerif.exe' -RestoredPackages $packagesDir
 $inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe' -RestoredPackages $packagesDir
 
 Write-Host "WDK NuGet props: $wdkProps"
-Write-Host "Building ExtFS $Configuration x64 with: $msbuild"
-& $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" /p:Platform=x64
+Write-Host "Building ExtFS $Configuration $Platform with: $msbuild"
+& $msbuild $solution /m /t:Clean,Build "/p:Configuration=$Configuration" "/p:Platform=$Platform"
 if ($LASTEXITCODE -ne 0) { throw "MSBuild failed with exit code $LASTEXITCODE." }
 
 if (-not $SkipCodeAnalysis) {
     Write-Host 'Running WDK/Visual C++ driver Code Analysis...'
-    & $msbuild $project /m "/p:Configuration=$Configuration" /p:Platform=x64 `
+    & $msbuild $project /m "/p:Configuration=$Configuration" "/p:Platform=$Platform" `
         /p:RunCodeAnalysisOnce=True
     if ($LASTEXITCODE -ne 0) { throw "Driver Code Analysis failed with exit code $LASTEXITCODE." }
 }
 
 $driverRoot = Join-Path $PSScriptRoot 'driver'
 $driver = Get-ChildItem -LiteralPath $driverRoot -Filter extfs.sys -File -Recurse |
-    Where-Object FullName -Match "\\$Configuration\\" |
+    Where-Object FullName -Match "\\$Platform\\$Configuration\\" |
     Sort-Object LastWriteTimeUtc -Descending |
     Select-Object -First 1
 if (-not $driver) {
     throw 'The build completed but extfs.sys could not be located under windows\driver.'
+}
+$peMachine = Get-PortableExecutableMachine -Path $driver.FullName
+$expectedPeMachine = if ($Platform -eq 'ARM64') { 0xAA64 } else { 0x8664 }
+if ($peMachine -ne $expectedPeMachine) {
+    throw ('Driver machine mismatch: expected 0x{0:X4} for {1}, found 0x{2:X4}.' -f $expectedPeMachine, $Platform, $peMachine)
 }
 
 # The checked-in INF is the release manifest. WDK's build output may carry a
@@ -215,7 +241,11 @@ if ($LASTEXITCODE -ne 0) { throw "InfVerif failed with exit code $LASTEXITCODE."
 # Generate the catalog explicitly after staging the final SYS and release-controlled INF.
 # This avoids relying on Visual Studio's implicit signing certificate and makes
 # the catalog hashes correspond exactly to the package that our setup ships.
-$inf2catOs = '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
+$inf2catOs = if ($Platform -eq 'ARM64') {
+    '10_VB_ARM64,10_CO_ARM64,10_NI_ARM64,10_GE_ARM64,10_25H2_ARM64'
+} else {
+    '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
+}
 Write-Host "Generating extfs.cat with Inf2Cat for: $inf2catOs"
 & $inf2cat "/driver:$release" "/os:$inf2catOs" /uselocaltime
 if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed with exit code $LASTEXITCODE." }
@@ -229,6 +259,8 @@ $report = @(
     "ExtFS Windows build validation"
     "Date: $([DateTime]::Now.ToString('o'))"
     "Configuration: $Configuration"
+    "Platform: $Platform"
+    ("PEMachine: 0x{0:X4}" -f $peMachine)
     "MSBuild: $msbuild"
     "NuGet: $nuget"
     "WDKNuGet: $wdkNuGetVersion"

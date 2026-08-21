@@ -16,6 +16,14 @@ function Capture-Command {
     }
 }
 
+Capture-Command 'host.txt' {
+    [pscustomobject]@{
+        ComputerName = $env:COMPUTERNAME
+        MachineArchitecture = [Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine')
+        OperatingSystem = (Get-CimInstance Win32_OperatingSystem -ErrorAction Stop).Caption
+        Version = [Environment]::OSVersion.Version.ToString()
+    } | Format-List
+}
 Capture-Command 'service.txt' { sc.exe query ExtFS }
 Capture-Command 'verifier.txt' { verifier.exe /querysettings }
 Capture-Command 'mountvol.txt' { mountvol.exe }

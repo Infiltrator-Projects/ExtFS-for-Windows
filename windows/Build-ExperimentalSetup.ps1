@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 [CmdletBinding()]
 param(
+    [ValidateSet('x64', 'ARM64')]
+    [string]$Platform = 'x64',
     [switch]$SkipCodeAnalysis,
     [switch]$KeepExistingTestCertificate
 )
@@ -89,6 +91,9 @@ function Invoke-BoundedSignatureInspection {
     }
 
     Write-Host $result.Output
+    if ($Catalog -and $result.Output -notmatch 'File is signed in catalog:') {
+        throw "Catalog membership was not confirmed for $File."
+    }
     if (-not $Catalog -and
         $result.SignerThumbprint -ne $ExpectedThumbprint) {
         throw "Signer thumbprint mismatch for $File; found '$($result.SignerThumbprint)'."
@@ -108,7 +113,7 @@ function Invoke-BoundedSignatureInspection {
     Write-Host "Signature and hash inspection reached the expected self-signed trust boundary for $File."
 }
 
-& $buildScript -Configuration Release -SkipCodeAnalysis:$SkipCodeAnalysis
+& $buildScript -Configuration Release -Platform $Platform -SkipCodeAnalysis:$SkipCodeAnalysis
 
 $signtool = Find-WindowsKitTool -Name 'signtool.exe'
 $inf2cat = Find-WindowsKitTool -Name 'Inf2Cat.exe'
@@ -146,7 +151,11 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash -eq $unsignedDriv
 # The catalog must hash the final signed SYS. Regenerate it after embedded
 # signing, then sign the catalog itself.
 Remove-Item -LiteralPath $catalog -Force
-$inf2catOs = '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
+$inf2catOs = if ($Platform -eq 'ARM64') {
+    '10_VB_ARM64,10_CO_ARM64,10_NI_ARM64,10_GE_ARM64,10_25H2_ARM64'
+} else {
+    '10_X64,10_VB_X64,10_CO_X64,10_NI_X64,10_GE_X64,10_25H2_X64'
+}
 & $inf2cat "/driver:$release" "/os:$inf2catOs" /uselocaltime
 if ($LASTEXITCODE -ne 0) { throw "Inf2Cat regeneration failed with exit code $LASTEXITCODE." }
 if (-not (Test-Path -LiteralPath $catalog)) { throw "Inf2Cat did not regenerate $catalog." }
@@ -170,12 +179,14 @@ Invoke-BoundedSignatureInspection -Tool $signtool -File $driver `
 Invoke-BoundedSignatureInspection -Tool $signtool -File $inf `
     -Catalog $catalog -ExpectedThumbprint $cert.Thumbprint
 
+$architectureSlug = if ($Platform -eq 'ARM64') { 'arm64' } else { 'x64' }
+$setupName = "ExtFS-for-Windows-0.9.3-experimental-$architectureSlug-setup.exe"
 $installerScript = Join-Path $PSScriptRoot 'installer\extfs-installer.nsi'
 Push-Location (Split-Path -Parent $installerScript)
 try {
-    & $makensis $installerScript
+    & $makensis "/DTARGET_ARCH=$Platform" $installerScript
     if ($LASTEXITCODE -ne 0) { throw "NSIS failed with exit code $LASTEXITCODE." }
-    $setup = Join-Path (Get-Location) 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+    $setup = Join-Path (Get-Location) $setupName
     if (-not (Test-Path -LiteralPath $setup)) { throw 'NSIS did not produce the expected setup file.' }
     Copy-Item -LiteralPath $setup -Destination (Join-Path $root (Split-Path $setup -Leaf)) -Force
 } finally {
@@ -190,10 +201,11 @@ if (Test-Path -LiteralPath $reportPath) {
         "FinalSignedDriverSHA256: $hash"
         "FinalSignedCatalogSHA256: $catHash"
         "CatalogMembershipVerified: True"
+        "FinalArchitecture: $Platform"
     )
 }
 Write-Host ''
 Write-Host 'Experimental package completed.'
 Write-Host "Signed driver SHA-256: $hash"
 Write-Host "Signed catalog SHA-256: $catHash"
-Write-Host "Setup: $(Join-Path $root 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe')"
+Write-Host "Setup: $(Join-Path $root $setupName)"

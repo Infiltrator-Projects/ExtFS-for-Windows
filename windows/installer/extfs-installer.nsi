@@ -7,15 +7,29 @@ ManifestSupportedOS all
 !include "LogicLib.nsh"
 !include "x64.nsh"
 
-Name "ExtFS for Windows 0.9.3 Experimental"
-OutFile "ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe"
+!ifndef TARGET_ARCH
+!define TARGET_ARCH "x64"
+!endif
+
+!if "${TARGET_ARCH}" S== "ARM64"
+!define EXPECTED_MACHINE_ARCH "ARM64"
+!define ARCH_SLUG "arm64"
+!else if "${TARGET_ARCH}" S== "x64"
+!define EXPECTED_MACHINE_ARCH "AMD64"
+!define ARCH_SLUG "x64"
+!else
+!error "TARGET_ARCH must be x64 or ARM64"
+!endif
+
+Name "ExtFS for Windows 0.9.3 Experimental (${TARGET_ARCH})"
+OutFile "ExtFS-for-Windows-0.9.3-experimental-${ARCH_SLUG}-setup.exe"
 InstallDir "$PROGRAMFILES64\ExtFS"
 BrandingText "ExtFS Project"
 
 VIProductVersion "0.9.3.0"
 VIAddVersionKey "ProductName" "ExtFS for Windows"
 VIAddVersionKey "CompanyName" "Shannon Smith"
-VIAddVersionKey "FileDescription" "ExtFS experimental x64 setup"
+VIAddVersionKey "FileDescription" "ExtFS experimental ${TARGET_ARCH} setup"
 VIAddVersionKey "FileVersion" "0.9.3.0"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 
@@ -29,21 +43,22 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-; Refuse unsupported architectures before presenting the experimental-driver warning.
+; Refuse a driver/host architecture mismatch before showing the warning.
 Function .onInit
-    ${IfNot} ${RunningX64}
-        MessageBox MB_ICONSTOP "This package requires 64-bit Intel/AMD Windows."
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -Command "if ([Environment]::GetEnvironmentVariable(''PROCESSOR_ARCHITECTURE'',''Machine'') -eq ''${EXPECTED_MACHINE_ARCH}'') { exit 0 } else { exit 1 }"'
+    Pop $0
+    Pop $1
+    ${If} $0 != 0
+        MessageBox MB_ICONSTOP "This package requires native ${TARGET_ARCH} Windows. It cannot install a kernel driver on a different architecture."
         Abort
     ${EndIf}
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-        "ExtFS 0.9.3 is an unvalidated kernel-driver checkpoint. Use it only in a disposable Windows VM with a backed-up test volume. It supports same-size data overwrites on eligible ext2/ext3/ext4 volumes, direct-block growth/truncation on ext2, bounded journaled direct-file growth/truncation on clean eligible ext3 volumes, and checksum-aware ext4 resize using either the inline root or one external leaf behind a depth-1 root. Deeper or multi-leaf extent-tree mutation, 64-bit/flex_bg allocation, create/delete/rename and dirty-journal replay remain refused. A driver defect can still crash Windows.$\r$\n$\r$\nContinue?" \
+        "ExtFS 0.9.3 is a test-only kernel-driver checkpoint. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
         IDOK continue
     Abort
 continue:
 FunctionEnd
 
-; Stage the driver, certificate and PowerShell lifecycle scripts, then let the
-; PowerShell installer perform the privileged service/certificate operations.
 Section "Install ExtFS" SecMain
     SetRegView 64
     ${DisableX64FSRedirection}
@@ -54,14 +69,14 @@ Section "Install ExtFS" SecMain
     File "..\..\release\driver\extfs-test.cer"
     File "Install-ExtFS.ps1"
     File "Uninstall-ExtFS.ps1"
+    File "..\test\Test-HostReadiness.ps1"
     File "..\..\docs\WINDOWS_BUILD.md"
+    File "..\..\docs\ARM64_TESTING.md"
     WriteUninstaller "$INSTDIR\Uninstall-ExtFS.exe"
 
-    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-ExtFS.ps1"'
+    nsExec::ExecToStack '"$SYSDIR\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -ExecutionPolicy Bypass -File "$INSTDIR\Install-ExtFS.ps1" -TargetArchitecture "${TARGET_ARCH}"'
     Pop $0
     Pop $1
-    ; Exit 3010 is deliberate: TESTSIGNING was enabled and Windows must reboot
-    ; before this same setup can load the test-signed filesystem driver.
     ${If} $0 == 3010
         SetRebootFlag true
         MessageBox MB_ICONINFORMATION|MB_OK \
@@ -73,7 +88,7 @@ Section "Install ExtFS" SecMain
     ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayName" "ExtFS for Windows 0.9.3 Experimental"
+        "DisplayName" "ExtFS for Windows 0.9.3 Experimental (${TARGET_ARCH})"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "UninstallString" '"$INSTDIR\Uninstall-ExtFS.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
@@ -98,7 +113,9 @@ Section "Uninstall"
     Delete "$INSTDIR\extfs-test.cer"
     Delete "$INSTDIR\Install-ExtFS.ps1"
     Delete "$INSTDIR\Uninstall-ExtFS.ps1"
+    Delete "$INSTDIR\Test-HostReadiness.ps1"
     Delete "$INSTDIR\WINDOWS_BUILD.md"
+    Delete "$INSTDIR\ARM64_TESTING.md"
     Delete "$INSTDIR\Uninstall-ExtFS.exe"
     RMDir /REBOOTOK "$INSTDIR"
     DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS"
