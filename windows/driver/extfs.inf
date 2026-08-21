@@ -21,10 +21,17 @@ extfs.sys = 1
 OptionDesc = %ServiceDescription%
 CopyFiles  = ExtFS.DriverFiles
 
+[DefaultInstall.NTarm64]
+OptionDesc = %ServiceDescription%
+CopyFiles  = ExtFS.DriverFiles
+
 [ExtFS.DriverFiles]
 extfs.sys
 
 [DefaultInstall.NTamd64.Services]
+AddService = ExtFS,,ExtFS.Service
+
+[DefaultInstall.NTarm64.Services]
 AddService = ExtFS,,ExtFS.Service
 
 [ExtFS.Service]

@@ -29,10 +29,11 @@ On Windows with Visual Studio/WDK and NSIS, clone with submodules so the exact I
 ```bat
 git clone --recurse-submodules https://github.com/The-First-Infiltrator/ExtFS-for-Windows.git
 cd ExtFS-for-Windows
-BUILD-EXTFS.cmd
+BUILD-EXTFS.cmd setup x64
+BUILD-EXTFS.cmd setup ARM64
 ```
 
-The expected package is `ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe`. It is a test-signed experimental kernel driver, not a production filesystem.
+The expected packages are `ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe` and `ExtFS-for-Windows-0.9.3-experimental-arm64-setup.exe`. Both are test-signed experimental kernel drivers, not production filesystems. The installer and build pipeline verify the driver PE architecture before packaging or installation. See `docs/ARM64_TESTING.md` before replacing any existing ARM64 filesystem driver.
 
 ## Deliberate boundaries
 

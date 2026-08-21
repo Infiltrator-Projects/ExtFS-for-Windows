@@ -11,9 +11,18 @@ permissions:
   contents: read
 
 jobs:
-  package-x64:
+  package:
+    name: Package ${{ matrix.platform }}
     runs-on: windows-latest
     timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: x64
+            slug: x64
+          - platform: ARM64
+            slug: arm64
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,22 +67,27 @@ jobs:
         timeout-minutes: 25
         shell: powershell
         run: |
-          .\windows\Build-ExperimentalSetup.ps1
-          $setup = 'ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe'
+          $platform = '${{ matrix.platform }}'
+          $slug = '${{ matrix.slug }}'
+          .\windows\Build-ExperimentalSetup.ps1 -Platform $platform
+          $setup = "ExtFS-for-Windows-0.9.3-experimental-$slug-setup.exe"
           if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
           $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
           if ($version -ne '0.9.3.0') { throw "Installer version mismatch: expected 0.9.3.0, found '$version'." }
           $driverVer = Get-Content -LiteralPath 'release\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
           if (($driverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Staged INF version mismatch: '$driverVer'." }
+          $report = Get-Content -LiteralPath 'release\driver\build-report.txt' -Raw
+          if ($report -notmatch "(?m)^Platform: $([regex]::Escape($platform))\r?$") { throw 'Build report platform mismatch.' }
+          if ($report -notmatch "(?m)^FinalArchitecture: $([regex]::Escape($platform))\r?$") { throw 'Final package architecture evidence is missing.' }
           Write-Host "Installer SHA-256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash)"
 
       - name: Upload package evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: extfs-093-wdk-package
+          name: extfs-093-${{ matrix.slug }}-wdk-package
           path: |
-            ExtFS-for-Windows-0.9.3-experimental-x64-setup.exe
+            ExtFS-for-Windows-0.9.3-experimental-${{ matrix.slug }}-setup.exe
             release/driver/build-report.txt
             release/driver/extfs.inf
           if-no-files-found: ignore
