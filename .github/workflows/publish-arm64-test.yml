@@ -31,8 +31,21 @@ jobs:
           if ((Get-Content -LiteralPath 'third_party\infiltratr-common\VERSION' -Raw).Trim() -ne '1.9.0') { throw 'Infiltratr Common is not pinned at 1.9.0.' }
           $sourceDriverVer = Get-Content -LiteralPath 'windows\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
           if (($sourceDriverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Source INF version mismatch: '$sourceDriverVer'." }
-          & gh release view v0.9.3-arm64-test.1 --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { throw 'Prerelease v0.9.3-arm64-test.1 already exists; refusing to overwrite it.' }
+          $releaseUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/v0.9.3-arm64-test.1"
+          $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $releaseExists = $false
+          try {
+              Invoke-RestMethod -Uri $releaseUri -Headers $headers -Method Get | Out-Null
+              $releaseExists = $true
+          } catch {
+              $status = [int]$_.Exception.Response.StatusCode
+              if ($status -ne 404) { throw }
+          }
+          if ($releaseExists) { throw 'Prerelease v0.9.3-arm64-test.1 already exists; refusing to overwrite it.' }
 
       - name: Locate NuGet
         timeout-minutes: 5
