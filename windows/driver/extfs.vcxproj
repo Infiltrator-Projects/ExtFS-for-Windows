@@ -10,6 +10,7 @@
   <PropertyGroup Label="Globals">
     <ProjectGuid>{0B5EA61E-5995-47E4-969B-F23068B64E0F}</ProjectGuid>
     <RootNamespace>ExtFS</RootNamespace>
+    <PreferredToolArchitecture>x64</PreferredToolArchitecture>
     <Configuration Condition="'$(Configuration)' == ''">Debug</Configuration>
     <Platform Condition="'$(Platform)' == ''">x64</Platform>
   </PropertyGroup>
