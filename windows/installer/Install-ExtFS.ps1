@@ -6,11 +6,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$packageVersion = '0.9.4'
 $serviceName = 'ExtFS'
 $installRoot = Join-Path $env:ProgramFiles 'ExtFS'
 $driverSource = Join-Path $PSScriptRoot 'extfs.sys'
 $certificateSource = Join-Path $PSScriptRoot 'extfs-test.cer'
 $driverDestination = Join-Path $env:SystemRoot 'System32\drivers\extfs.sys'
+# This is an NT kernel image path, not a PowerShell/C escaped string. A single
+# leading backslash is required. Using '\\SystemRoot\\...' writes literal
+# doubled backslashes to the service ImagePath and prevents the filesystem
+# driver from loading even though CreateService itself succeeds.
+$serviceImagePath = '\SystemRoot\System32\drivers\extfs.sys'
+$serviceRegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -71,6 +78,33 @@ function Wait-ServiceRemoved {
     throw "Timed out waiting for the $Name service to be removed."
 }
 
+function Get-RecentDriverDiagnostics {
+    $lines = @()
+    $since = (Get-Date).AddMinutes(-5)
+    try {
+        $lines += Get-WinEvent -FilterHashtable @{
+            LogName = 'System'
+            ProviderName = 'Service Control Manager'
+            StartTime = $since
+        } -ErrorAction Stop |
+            Select-Object -First 6 |
+            ForEach-Object { "SCM $($_.Id): $($_.Message -replace '[\r\n]+', ' ')" }
+    } catch {
+        $lines += "SCM diagnostics unavailable: $($_.Exception.Message)"
+    }
+    try {
+        $lines += Get-WinEvent -FilterHashtable @{
+            LogName = 'Microsoft-Windows-CodeIntegrity/Operational'
+            StartTime = $since
+        } -ErrorAction Stop |
+            Select-Object -First 6 |
+            ForEach-Object { "CodeIntegrity $($_.Id): $($_.Message -replace '[\r\n]+', ' ')" }
+    } catch {
+        $lines += "Code Integrity diagnostics unavailable: $($_.Exception.Message)"
+    }
+    return ($lines -join [Environment]::NewLine)
+}
+
 Assert-Administrator
 
 $machineArchitecture = [Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine')
@@ -118,7 +152,7 @@ Import-Certificate -FilePath $certificateSource -CertStoreLocation 'Cert:\LocalM
 if ($LASTEXITCODE -eq 0) {
     & sc.exe stop $serviceName *> $null
     if (-not (Wait-ServiceStopped -Name $serviceName)) {
-        Write-Host 'ExtFS 0.9.3 is intentionally non-unloadable for the entire boot. Restart Windows, then run this setup again.'
+        Write-Host "ExtFS $packageVersion is intentionally non-unloadable for the entire boot. Restart Windows, then run this setup again."
         exit 3010
     }
     & sc.exe delete $serviceName *> $null
@@ -130,14 +164,39 @@ if ($LASTEXITCODE -eq 0) {
 
 Copy-Item -LiteralPath $driverSource -Destination $driverDestination -Force
 
-& sc.exe create $serviceName type= filesys start= demand error= normal binPath= '\SystemRoot\System32\drivers\extfs.sys' DisplayName= 'ExtFS for Windows (experimental)'
+& sc.exe create $serviceName type= filesys start= demand error= normal binPath= $serviceImagePath group= 'File System' DisplayName= 'ExtFS for Windows (experimental)'
 if ($LASTEXITCODE -ne 0) {
     throw "The ExtFS filesystem service could not be created (sc.exe exit $LASTEXITCODE)."
 }
 & sc.exe description $serviceName 'Experimental native ext2/ext3/ext4 filesystem driver with bounded ext2/ext3/ext4 file resize' | Out-Null
-& sc.exe start $serviceName
-if ($LASTEXITCODE -ne 0) {
-    throw "Windows installed the files but could not load ExtFS (sc.exe exit $LASTEXITCODE). Check Service Control Manager and Code Integrity events."
+
+# Validate the exact service contract before asking the kernel to load anything.
+# This catches malformed quoting/escaping in the installer itself rather than
+# surfacing it later as an opaque StartService failure.
+$serviceConfig = Get-ItemProperty -LiteralPath $serviceRegistryPath -ErrorAction Stop
+$configuredImagePath = [string]$serviceConfig.ImagePath
+if ($configuredImagePath -ne $serviceImagePath) {
+    & sc.exe delete $serviceName *> $null
+    throw "ExtFS service ImagePath validation failed: expected '$serviceImagePath', found '$configuredImagePath'."
+}
+if ([int]$serviceConfig.Type -ne 2 -or [int]$serviceConfig.Start -ne 3) {
+    & sc.exe delete $serviceName *> $null
+    throw "ExtFS service configuration validation failed: expected filesystem Type=2 and demand Start=3; found Type=$($serviceConfig.Type), Start=$($serviceConfig.Start)."
 }
 
-Write-Host "ExtFS 0.9.3 $TargetArchitecture loaded. Reconnect or reattach the clean, backed-up ext test volume."
+$startOutput = (& sc.exe start $serviceName 2>&1 | Out-String).Trim()
+$startExit = $LASTEXITCODE
+if ($startExit -ne 0) {
+    $diagnostics = Get-RecentDriverDiagnostics
+    throw @"
+Windows installed the files and created ExtFS with the validated image path '$serviceImagePath', but the kernel still refused to load it (sc.exe exit $startExit).
+
+sc.exe output:
+$startOutput
+
+Recent driver diagnostics:
+$diagnostics
+"@
+}
+
+Write-Host "ExtFS $packageVersion $TargetArchitecture loaded. Reconnect or reattach the clean, backed-up ext test volume."

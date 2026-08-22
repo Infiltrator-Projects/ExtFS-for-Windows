@@ -21,16 +21,16 @@ ManifestSupportedOS all
 !error "TARGET_ARCH must be x64 or ARM64"
 !endif
 
-Name "ExtFS for Windows 0.9.3 Experimental (${TARGET_ARCH})"
-OutFile "ExtFS-for-Windows-0.9.3-experimental-${ARCH_SLUG}-setup.exe"
+Name "ExtFS for Windows 0.9.4 Experimental (${TARGET_ARCH})"
+OutFile "ExtFS-for-Windows-0.9.4-experimental-${ARCH_SLUG}-setup.exe"
 InstallDir "$PROGRAMFILES64\ExtFS"
 BrandingText "ExtFS Project"
 
-VIProductVersion "0.9.3.0"
+VIProductVersion "0.9.4.0"
 VIAddVersionKey "ProductName" "ExtFS for Windows"
 VIAddVersionKey "CompanyName" "Shannon Smith"
 VIAddVersionKey "FileDescription" "ExtFS experimental ${TARGET_ARCH} setup"
-VIAddVersionKey "FileVersion" "0.9.3.0"
+VIAddVersionKey "FileVersion" "0.9.4.0"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 
 !define MUI_ABORTWARNING
@@ -53,7 +53,7 @@ Function .onInit
         Abort
     ${EndIf}
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-        "ExtFS 0.9.3 is a test-only kernel-driver checkpoint. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
+        "ExtFS 0.9.4 is a test-only kernel-driver checkpoint. This release is an installer hotfix carrying the already-qualified 0.9.3 driver payload. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
         IDOK continue
     Abort
 continue:
@@ -88,13 +88,13 @@ Section "Install ExtFS" SecMain
     ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayName" "ExtFS for Windows 0.9.3 Experimental (${TARGET_ARCH})"
+        "DisplayName" "ExtFS for Windows 0.9.4 Experimental (${TARGET_ARCH})"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "UninstallString" '"$INSTDIR\Uninstall-ExtFS.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "Publisher" "Shannon Smith"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayVersion" "0.9.3"
+        "DisplayVersion" "0.9.4"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
