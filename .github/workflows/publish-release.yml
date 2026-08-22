@@ -114,3 +114,13 @@ jobs:
           $assets = @($release.assets | Where-Object name -eq $setup)
           if ($assets.Count -ne 1) { throw "Expected exactly one installer asset '$setup'." }
           Write-Host "Published and verified v0.9.6 with $setup"
+
+      - name: Record publication receipt on main
+        shell: powershell
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --allow-empty -m 'ExtFS 0.9.6 release published'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to create publication receipt commit.' }
+          git push origin HEAD:main
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to push publication receipt commit.' }
