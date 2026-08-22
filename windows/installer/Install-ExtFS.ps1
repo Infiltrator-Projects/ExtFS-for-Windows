@@ -188,8 +188,8 @@ if ($secureBootEnabled) {
 }
 
 if (-not (Test-TestSigningEnabled)) {
-    New-Item -ItemType Directory -Path $stateRegistryPath -Force | Out-Null
-    Set-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -Value (Get-CurrentBootMarker) -Type String
+    New-Item -Path $stateRegistryPath -Force | Out-Null
+    New-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -Value (Get-CurrentBootMarker) -PropertyType String -Force | Out-Null
     & bcdedit.exe /set testsigning on
     if ($LASTEXITCODE -ne 0) {
         Remove-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -ErrorAction SilentlyContinue
