@@ -90,9 +90,7 @@ jobs:
           export PATCH_SHA256="$patch_sha"
           python3 - <<'PY'
           import base64, json, os, pathlib, subprocess, urllib.request
-          repo = os.environ['GITHUB_REPOSITORY']
-          token = os.environ['GITHUB_TOKEN']
-          base = os.environ['GITHUB_SHA']
+          repo = os.environ['GITHUB_REPOSITORY']; token = os.environ['GITHUB_TOKEN']; base = os.environ['GITHUB_SHA']
           api = f'https://api.github.com/repos/{repo}'
           def request(method, path, payload=None):
               data = None if payload is None else json.dumps(payload).encode()
@@ -100,29 +98,24 @@ jobs:
               req.add_header('Authorization', f'Bearer {token}')
               req.add_header('Accept', 'application/vnd.github+json')
               req.add_header('X-GitHub-Api-Version', '2022-11-28')
-              with urllib.request.urlopen(req) as r:
-                  return json.load(r)
+              with urllib.request.urlopen(req) as r: return json.load(r)
           base_commit = request('GET', f'/git/commits/{base}')
           entries = []
           fields = subprocess.check_output(['git','diff','--name-status','-z','HEAD']).decode().split('\0')
           i = 0
           while i < len(fields) and fields[i]:
-              status = fields[i]; i += 1
-              path = fields[i]; i += 1
-              if status.startswith('R') or status.startswith('C'):
-                  path = fields[i]; i += 1
+              status = fields[i]; i += 1; path = fields[i]; i += 1
+              if status.startswith('R') or status.startswith('C'): path = fields[i]; i += 1
               if status.startswith('D'):
-                  entries.append({'path':path,'mode':'100644','type':'blob','sha':None})
-                  continue
+                  entries.append({'path':path,'mode':'100644','type':'blob','sha':None}); continue
               content = pathlib.Path(path).read_bytes()
               blob = request('POST','/git/blobs',{'content':base64.b64encode(content).decode(),'encoding':'base64'})
-              entries.append({'path':path,'mode':'100644','type':'blob','sha':blob['sha']})
+              mode = subprocess.check_output(['git','ls-files','-s','--',path]).decode().split()[0] if subprocess.check_output(['git','ls-files','-s','--',path]).strip() else '100644'
+              entries.append({'path':path,'mode':mode,'type':'blob','sha':blob['sha']})
           tree = request('POST','/git/trees',{'base_tree':base_commit['tree']['sha'],'tree':entries})
           commit = request('POST','/git/commits',{'message':'Pre-MS hardening: lifecycle and filename correctness','tree':tree['sha'],'parents':[base]})
           with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-              f.write(f"source_sha={commit['sha']}\n")
-              f.write(f"base_sha={base}\n")
-              f.write(f"patch_sha256={os.environ['PATCH_SHA256']}\n")
+              f.write(f"source_sha={commit['sha']}\nbase_sha={base}\npatch_sha256={os.environ['PATCH_SHA256']}\n")
           print('Detached qualified candidate:', commit['sha'])
           PY
       - uses: actions/upload-artifact@v4
@@ -144,10 +137,7 @@ jobs:
           {
             echo 'Pre-MS qualification stopped before main moved.'
             echo "Stage outcomes: transform=${{ steps.transform.outcome }}, docs=${{ steps.docs.outcome }}, qualify=${{ steps.qualify.outcome }}, detached=${{ steps.detached.outcome }}"
-            for log in "$RUNNER_TEMP/extfs-transform.log" "$RUNNER_TEMP/extfs-qualification.log"; do
-              [ -f "$log" ] || continue
-              echo; echo "--- $(basename "$log") tail ---"; tail -n 120 "$log"
-            done
+            for log in "$RUNNER_TEMP/extfs-transform.log" "$RUNNER_TEMP/extfs-qualification.log"; do [ -f "$log" ] || continue; echo; echo "--- $(basename "$log") tail ---"; tail -n 120 "$log"; done
           } > "$report"
           gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file "$report"
   wdk:
@@ -188,20 +178,13 @@ jobs:
         timeout-minutes: 5
         shell: powershell
         run: |
-          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) {
-              choco install nuget.commandline -y --no-progress
-              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
-          }
+          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) { choco install nuget.commandline -y --no-progress; if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." } }
       - name: Ensure full WDK validation tools
         timeout-minutes: 15
         shell: powershell
         run: |
           $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $inf2cat) {
-              $winget = Get-Command winget.exe -ErrorAction Stop
-              & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
-              if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." }
-          }
+          if (-not $inf2cat) { $winget = Get-Command winget.exe -ErrorAction Stop; & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." } }
       - name: Build analyse and validate WDK package
         shell: powershell
         timeout-minutes: 30
