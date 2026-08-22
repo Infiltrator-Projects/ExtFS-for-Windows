@@ -50,8 +50,10 @@ if ($text -notmatch [regex]::Escape('[System.Runtime.InteropServices.RuntimeInfo
 if ($text -notmatch [regex]::Escape('$env:PROCESSOR_ARCHITEW6432')) {
     throw 'Installer must retain a WOW64-safe native-architecture fallback.'
 }
-if ($nsiText -match [regex]::Escape('PROCESSOR_ARCHITECTURE')) {
-    throw 'NSIS must not perform its own PROCESSOR_ARCHITECTURE architecture gate; PowerShell performs the authoritative OS and PE checks.'
+# Documentation may legitimately mention PROCESSOR_ARCHITECTURE. Reject only
+# an executable NSIS gate that invokes it, not explanatory comments.
+if ($nsiText -match '(?im)^\s*nsExec::ExecToStack.*PROCESSOR_ARCHITECTURE') {
+    throw 'NSIS must not execute its own PROCESSOR_ARCHITECTURE architecture gate; PowerShell performs the authoritative OS and PE checks.'
 }
 
 Write-Host 'Installer service-path and native-architecture contracts: PASS'
