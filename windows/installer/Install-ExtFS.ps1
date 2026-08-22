@@ -6,13 +6,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+$packageVersion = '0.9.4'
 $serviceName = 'ExtFS'
 $installRoot = Join-Path $env:ProgramFiles 'ExtFS'
 $driverSource = Join-Path $PSScriptRoot 'extfs.sys'
 $certificateSource = Join-Path $PSScriptRoot 'extfs-test.cer'
 $driverDestination = Join-Path $env:SystemRoot 'System32\drivers\extfs.sys'
-# This is an NT kernel image path, not a PowerShell/C escaped string.  A single
-# leading backslash is required.  Using '\\SystemRoot\\...' writes literal
+# This is an NT kernel image path, not a PowerShell/C escaped string. A single
+# leading backslash is required. Using '\\SystemRoot\\...' writes literal
 # doubled backslashes to the service ImagePath and prevents the filesystem
 # driver from loading even though CreateService itself succeeds.
 $serviceImagePath = '\SystemRoot\System32\drivers\extfs.sys'
@@ -151,7 +152,7 @@ Import-Certificate -FilePath $certificateSource -CertStoreLocation 'Cert:\LocalM
 if ($LASTEXITCODE -eq 0) {
     & sc.exe stop $serviceName *> $null
     if (-not (Wait-ServiceStopped -Name $serviceName)) {
-        Write-Host 'ExtFS 0.9.3 is intentionally non-unloadable for the entire boot. Restart Windows, then run this setup again.'
+        Write-Host "ExtFS $packageVersion is intentionally non-unloadable for the entire boot. Restart Windows, then run this setup again."
         exit 3010
     }
     & sc.exe delete $serviceName *> $null
@@ -198,4 +199,4 @@ $diagnostics
 "@
 }
 
-Write-Host "ExtFS 0.9.3 $TargetArchitecture loaded. Reconnect or reattach the clean, backed-up ext test volume."
+Write-Host "ExtFS $packageVersion $TargetArchitecture loaded. Reconnect or reattach the clean, backed-up ext test volume."
