@@ -9,9 +9,6 @@ permissions:
   contents: write
   issues: write
 
-env:
-  TRIGGER_TITLE: '[HAL] Run ExtFS pre-MS hardening'
-
 jobs:
   portable:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
@@ -27,8 +24,7 @@ jobs:
           fetch-depth: 0
           submodules: recursive
       - name: Announce start
-        env:
-          GH_TOKEN: ${{ github.token }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS qualification started at $GITHUB_SHA. main will not move unless portable, real-image, cross-build and both WDK architectures pass."
       - name: Apply audited source transformation
         id: transform
@@ -78,8 +74,7 @@ jobs:
           } 2>&1 | tee "$RUNNER_TEMP/extfs-qualification.log"
       - name: Build exact detached candidate and patch
         id: detached
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        env: { GITHUB_TOKEN: "${{ github.token }}" }
         shell: bash
         run: |
           set -euo pipefail
@@ -90,33 +85,25 @@ jobs:
           export PATCH_SHA256="$patch_sha"
           python3 - <<'PY'
           import base64, json, os, pathlib, subprocess, urllib.request
-          repo = os.environ['GITHUB_REPOSITORY']; token = os.environ['GITHUB_TOKEN']; base = os.environ['GITHUB_SHA']
-          api = f'https://api.github.com/repos/{repo}'
-          def request(method, path, payload=None):
-              data = None if payload is None else json.dumps(payload).encode()
-              req = urllib.request.Request(api + path, data=data, method=method)
-              req.add_header('Authorization', f'Bearer {token}')
-              req.add_header('Accept', 'application/vnd.github+json')
-              req.add_header('X-GitHub-Api-Version', '2022-11-28')
-              with urllib.request.urlopen(req) as r: return json.load(r)
-          base_commit = request('GET', f'/git/commits/{base}')
-          entries = []
-          fields = subprocess.check_output(['git','diff','--name-status','-z','HEAD']).decode().split('\0')
-          i = 0
-          while i < len(fields) and fields[i]:
-              status = fields[i]; i += 1; path = fields[i]; i += 1
-              if status.startswith('R') or status.startswith('C'): path = fields[i]; i += 1
+          repo=os.environ['GITHUB_REPOSITORY']; token=os.environ['GITHUB_TOKEN']; base=os.environ['GITHUB_SHA']; api=f'https://api.github.com/repos/{repo}'
+          def req(method,path,payload=None):
+              data=None if payload is None else json.dumps(payload).encode(); r=urllib.request.Request(api+path,data=data,method=method)
+              r.add_header('Authorization',f'Bearer {token}'); r.add_header('Accept','application/vnd.github+json'); r.add_header('X-GitHub-Api-Version','2022-11-28')
+              with urllib.request.urlopen(r) as h: return json.load(h)
+          base_commit=req('GET',f'/git/commits/{base}'); entries=[]
+          fields=subprocess.check_output(['git','diff','--name-status','-z','HEAD']).decode().split('\0'); i=0
+          while i<len(fields) and fields[i]:
+              status=fields[i]; i+=1; path=fields[i]; i+=1
+              if status.startswith(('R','C')): path=fields[i]; i+=1
               if status.startswith('D'):
                   entries.append({'path':path,'mode':'100644','type':'blob','sha':None}); continue
-              content = pathlib.Path(path).read_bytes()
-              blob = request('POST','/git/blobs',{'content':base64.b64encode(content).decode(),'encoding':'base64'})
-              mode = subprocess.check_output(['git','ls-files','-s','--',path]).decode().split()[0] if subprocess.check_output(['git','ls-files','-s','--',path]).strip() else '100644'
+              content=pathlib.Path(path).read_bytes(); blob=req('POST','/git/blobs',{'content':base64.b64encode(content).decode(),'encoding':'base64'})
+              ls=subprocess.check_output(['git','ls-files','-s','--',path]).decode().split(); mode=ls[0] if ls else '100644'
               entries.append({'path':path,'mode':mode,'type':'blob','sha':blob['sha']})
-          tree = request('POST','/git/trees',{'base_tree':base_commit['tree']['sha'],'tree':entries})
-          commit = request('POST','/git/commits',{'message':'Pre-MS hardening: lifecycle and filename correctness','tree':tree['sha'],'parents':[base]})
-          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
-              f.write(f"source_sha={commit['sha']}\nbase_sha={base}\npatch_sha256={os.environ['PATCH_SHA256']}\n")
-          print('Detached qualified candidate:', commit['sha'])
+          tree=req('POST','/git/trees',{'base_tree':base_commit['tree']['sha'],'tree':entries})
+          commit=req('POST','/git/commits',{'message':'Pre-MS hardening: lifecycle and filename correctness','tree':tree['sha'],'parents':[base]})
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write(f"source_sha={commit['sha']}\nbase_sha={base}\npatch_sha256={os.environ['PATCH_SHA256']}\n")
+          print(commit['sha'])
           PY
       - uses: actions/upload-artifact@v4
         with:
@@ -124,13 +111,11 @@ jobs:
           path: ${{ runner.temp }}/extfs-qualified/qualified.patch
           if-no-files-found: error
       - name: Report portable success
-        env:
-          GH_TOKEN: ${{ github.token }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Portable/real-image/contracts/cross-build PASS. Detached candidate: ${{ steps.detached.outputs.source_sha }}. Patch SHA-256: ${{ steps.detached.outputs.patch_sha256 }}. Starting WDK x64 + ARM64 against this exact patch."
       - name: Report portable failure
         if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         shell: bash
         run: |
           report="$RUNNER_TEMP/extfs-failure.txt"
@@ -147,8 +132,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      matrix:
-        platform: [x64, ARM64]
+      matrix: { platform: [x64, ARM64] }
     steps:
       - uses: actions/checkout@v4
         with:
@@ -162,13 +146,10 @@ jobs:
       - name: Apply exact qualified patch
         shell: powershell
         run: |
-          $patch = Join-Path $env:RUNNER_TEMP 'extfs-qualified\qualified.patch'
-          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch).Hash.ToLowerInvariant()
+          $patch=Join-Path $env:RUNNER_TEMP 'extfs-qualified\qualified.patch'; $actual=(Get-FileHash -Algorithm SHA256 -LiteralPath $patch).Hash.ToLowerInvariant()
           if ($actual -ne '${{ needs.portable.outputs.patch_sha256 }}') { throw "Patch hash mismatch: $actual" }
-          git apply --binary $patch
-          if ($LASTEXITCODE -ne 0) { throw "git apply failed with exit code $LASTEXITCODE" }
-          git diff --check
-          if ($LASTEXITCODE -ne 0) { throw 'Qualified patch failed git diff --check.' }
+          git apply --binary $patch; if ($LASTEXITCODE -ne 0) { throw "git apply failed with exit code $LASTEXITCODE" }
+          git diff --check; if ($LASTEXITCODE -ne 0) { throw 'Qualified patch failed git diff --check.' }
       - name: Verify filesystem and installer contracts
         shell: powershell
         run: |
@@ -183,8 +164,8 @@ jobs:
         timeout-minutes: 15
         shell: powershell
         run: |
-          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
-          if (-not $inf2cat) { $winget = Get-Command winget.exe -ErrorAction Stop; & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." } }
+          $inf2cat=Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $inf2cat) { $winget=Get-Command winget.exe -ErrorAction Stop; & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity; if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." } }
       - name: Build analyse and validate WDK package
         shell: powershell
         timeout-minutes: 30
@@ -192,8 +173,7 @@ jobs:
       - name: Report WDK failure
         if: failure()
         shell: powershell
-        env:
-          GH_TOKEN: ${{ github.token }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: gh issue comment '${{ github.event.issue.number }}' --repo '${{ github.repository }}' --body "WDK FAIL: ${{ matrix.platform }} for detached candidate ${{ needs.portable.outputs.source_sha }}. main was not moved."
   report:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening' && success()
@@ -201,6 +181,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Report exact candidate ready for main
-        env:
-          GH_TOKEN: ${{ github.token }}
+        env: { GH_TOKEN: "${{ github.token }}" }
         run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "PASS: portable real-image/cross-build and WDK x64 + ARM64 all qualified the exact hardening patch. Detached candidate ready to fast-forward main: ${{ needs.portable.outputs.source_sha }}. Parent/base: ${{ needs.portable.outputs.base_sha }}. Patch SHA-256: ${{ needs.portable.outputs.patch_sha256 }}. The candidate already removes all temporary hardening workflows/scripts."
