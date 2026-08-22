@@ -6,16 +6,18 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$packageVersion = '0.9.6'
+$packageVersion = '0.9.5'
 $serviceName = 'ExtFS'
 $installRoot = Join-Path $env:ProgramFiles 'ExtFS'
 $driverSource = Join-Path $PSScriptRoot 'extfs.sys'
 $certificateSource = Join-Path $PSScriptRoot 'extfs-test.cer'
 $driverDestination = Join-Path $env:SystemRoot 'System32\drivers\extfs.sys'
+# This is an NT kernel image path, not a PowerShell/C escaped string. A single
+# leading backslash is required. Using '\\SystemRoot\\...' writes literal
+# doubled backslashes to the service ImagePath and prevents the filesystem
+# driver from loading even though CreateService itself succeeds.
 $serviceImagePath = '\SystemRoot\System32\drivers\extfs.sys'
 $serviceRegistryPath = "HKLM:\SYSTEM\CurrentControlSet\Services\$serviceName"
-$stateRegistryPath = 'HKLM:\SOFTWARE\ExtFS'
-$testSigningBootMarkerName = 'TestSigningRequestedBoot'
 
 function Assert-Administrator {
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
@@ -30,51 +32,19 @@ function Test-TestSigningEnabled {
     return $text -match '(?im)^testsigning\s+Yes\s*$'
 }
 
-function Get-CurrentBootMarker {
-    $os = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction Stop
-    $boot = [DateTime]$os.LastBootUpTime
-    return $boot.ToUniversalTime().Ticks.ToString([Globalization.CultureInfo]::InvariantCulture)
-}
-
-function Get-ExtFsPendingFileOperations {
+function Test-PendingRestart {
     $sessionManager = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
-    $ops = @((Get-ItemProperty -LiteralPath $sessionManager -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations)
-    return @($ops | Where-Object {
-        -not [string]::IsNullOrWhiteSpace([string]$_) -and
-        ([string]$_ -match '(?i)(^|[\\/])extfs\.sys($|[\\/])' -or
-         [string]$_ -match '(?i)[\\/]ExtFS([\\/]|$)')
-    })
-}
-
-function Write-UnrelatedRestartAdvisory {
-    $reasons = @()
-    $sessionManager = 'HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager'
-    $allFileOps = @((Get-ItemProperty -LiteralPath $sessionManager -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations)
-    if ($allFileOps.Count -gt 0 -and (Get-ExtFsPendingFileOperations).Count -eq 0) {
-        $reasons += 'unrelated pending file rename operations'
-    }
-    if (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending') {
-        $reasons += 'Component Based Servicing reports RebootPending'
-    }
-    if (Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired') {
-        $reasons += 'Windows Update reports RebootRequired'
-    }
-    if ($reasons.Count -gt 0) {
-        Write-Warning ('Windows has an unrelated pending restart state (' + ($reasons -join '; ') + '). ExtFS 0.9.6 does not treat unrelated restart flags as a hard blocker.')
-    }
-}
-
-function Test-ExtFsRequestedRestartPending {
-    if (-not (Test-Path -LiteralPath $stateRegistryPath)) { return $false }
-    $saved = [string](Get-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -ErrorAction SilentlyContinue).$testSigningBootMarkerName
-    if ([string]::IsNullOrWhiteSpace($saved)) { return $false }
-    $current = Get-CurrentBootMarker
-    if ($saved -eq $current) { return $true }
-    Remove-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -ErrorAction SilentlyContinue
-    return $false
+    $fileRename = (Get-ItemProperty -LiteralPath $sessionManager -Name PendingFileRenameOperations -ErrorAction SilentlyContinue).PendingFileRenameOperations
+    $componentServicing = Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
+    $windowsUpdate = Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
+    return [bool]($fileRename -or $componentServicing -or $windowsUpdate)
 }
 
 function Get-NativeWindowsArchitecture {
+    # PROCESSOR_ARCHITECTURE is a process-scoped variable. Asking .NET for the
+    # machine-scoped environment value can return null and caused 0.9.4 to reject
+    # genuine x64 Windows systems. RuntimeInformation reports the operating-system
+    # architecture independently of whether Setup itself is a 32-bit process.
     try {
         $runtimeArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToUpperInvariant()
         switch ($runtimeArchitecture) {
@@ -83,6 +53,8 @@ function Get-NativeWindowsArchitecture {
             'X86'   { return 'x86' }
         }
     } catch {
+        # Windows PowerShell on supported Windows 11 builds normally exposes
+        # RuntimeInformation. Keep a WOW64-safe fallback for older hosts.
     }
 
     $nativeArchitecture = $env:PROCESSOR_ARCHITEW6432
@@ -137,14 +109,21 @@ function Get-RecentDriverDiagnostics {
     $lines = @()
     $since = (Get-Date).AddMinutes(-5)
     try {
-        $lines += Get-WinEvent -FilterHashtable @{ LogName = 'System'; ProviderName = 'Service Control Manager'; StartTime = $since } -ErrorAction Stop |
+        $lines += Get-WinEvent -FilterHashtable @{
+            LogName = 'System'
+            ProviderName = 'Service Control Manager'
+            StartTime = $since
+        } -ErrorAction Stop |
             Select-Object -First 6 |
             ForEach-Object { "SCM $($_.Id): $($_.Message -replace '[\r\n]+', ' ')" }
     } catch {
         $lines += "SCM diagnostics unavailable: $($_.Exception.Message)"
     }
     try {
-        $lines += Get-WinEvent -FilterHashtable @{ LogName = 'Microsoft-Windows-CodeIntegrity/Operational'; StartTime = $since } -ErrorAction Stop |
+        $lines += Get-WinEvent -FilterHashtable @{
+            LogName = 'Microsoft-Windows-CodeIntegrity/Operational'
+            StartTime = $since
+        } -ErrorAction Stop |
             Select-Object -First 6 |
             ForEach-Object { "CodeIntegrity $($_.Id): $($_.Message -replace '[\r\n]+', ' ')" }
     } catch {
@@ -168,15 +147,9 @@ $expectedDriverMachine = if ($TargetArchitecture -eq 'ARM64') { 0xAA64 } else { 
 if ($driverMachine -ne $expectedDriverMachine) {
     throw ('Driver machine mismatch: expected 0x{0:X4}, found 0x{1:X4}.' -f $expectedDriverMachine, $driverMachine)
 }
-
-$extfsPendingOps = @(Get-ExtFsPendingFileOperations)
-if ($extfsPendingOps.Count -gt 0) {
-    throw "Windows has an ExtFS-specific pending file replacement from an earlier install/uninstall. Restart Windows, then run ExtFS Setup again. Pending operation: $($extfsPendingOps[0])"
+if (Test-PendingRestart) {
+    throw 'Windows has a pending restart. Restart first, then run ExtFS Setup again; no driver was installed.'
 }
-if (Test-ExtFsRequestedRestartPending) {
-    throw 'ExtFS enabled Windows test-signing during this boot. Restart Windows once, then run ExtFS Setup again; no driver was installed.'
-}
-Write-UnrelatedRestartAdvisory
 
 try {
     $secureBootEnabled = Confirm-SecureBootUEFI -ErrorAction Stop
@@ -187,12 +160,11 @@ if ($secureBootEnabled) {
     throw 'Secure Boot is enabled. This test-signed driver must not be installed until testing is moved to a disposable system where Secure Boot can be disabled deliberately.'
 }
 
+# This checkpoint is test-signed only. Enabling TESTSIGNING changes Windows
+# boot policy, so require the reboot before installing or loading the driver.
 if (-not (Test-TestSigningEnabled)) {
-    New-Item -Path $stateRegistryPath -Force | Out-Null
-    New-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -Value (Get-CurrentBootMarker) -PropertyType String -Force | Out-Null
     & bcdedit.exe /set testsigning on
     if ($LASTEXITCODE -ne 0) {
-        Remove-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -ErrorAction SilentlyContinue
         throw 'Windows refused to enable test signing. Use only a disposable test system; do not weaken a production computer to test this driver.'
     }
     Write-Host 'Windows test signing has been enabled. Restart Windows, then run ExtFS Setup again.'
@@ -225,6 +197,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 & sc.exe description $serviceName 'Experimental native ext2/ext3/ext4 filesystem driver with bounded ext2/ext3/ext4 file resize' | Out-Null
 
+# Validate the exact service contract before asking the kernel to load anything.
+# This catches malformed quoting/escaping in the installer itself rather than
+# surfacing it later as an opaque StartService failure.
 $serviceConfig = Get-ItemProperty -LiteralPath $serviceRegistryPath -ErrorAction Stop
 $configuredImagePath = [string]$serviceConfig.ImagePath
 if ($configuredImagePath -ne $serviceImagePath) {
@@ -251,5 +226,4 @@ $diagnostics
 "@
 }
 
-Remove-ItemProperty -LiteralPath $stateRegistryPath -Name $testSigningBootMarkerName -ErrorAction SilentlyContinue
 Write-Host "ExtFS $packageVersion $TargetArchitecture loaded. Reconnect or reattach the clean, backed-up ext test volume."
