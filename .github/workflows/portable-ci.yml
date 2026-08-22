@@ -3,89 +3,61 @@ name: Portable ExtFS CI
 
 on:
   push:
-    branches: [main]
+    branches:
+      - main
   pull_request:
-    types: [opened, synchronize, reopened, closed]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  materialize-pre-ms:
-    if: github.event.action != 'closed' && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-          submodules: recursive
-      - name: Apply already-portable-qualified source hardening
-        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') == ''
-        run: python3 tools/apply-pre-ms-hardening.py
-      - name: Update feature-support documentation only
-        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') != ''
-        shell: python
-        run: |
-          from pathlib import Path
-          p=Path('docs/FEATURE_SUPPORT.md'); t=p.read_text()
-          old='| Volume lock/unlock | Refused | Exclusive lock ownership/enforcement not implemented |'
-          new='| Volume lock/unlock | Implemented | Direct volume handle only; lock succeeds only when no ordinary opens or mapped-section FCBs remain; ownership follows the issuing FILE_OBJECT and releases on unlock/cleanup |'
-          if old in t: t=t.replace(old,new,1)
-          if 'Locked-volume dismount' not in t: t+='\n| Locked-volume dismount | Implemented bounded path | `FSCTL_DISMOUNT_VOLUME` requires the issuing handle to own an ExtFS volume lock; unlocked forced-dismount teardown remains deferred |\n'
-          if 'Unrepresentable raw ext names' not in t: t+='| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration surfaces a name-conversion error rather than silently hiding a live entry |\n'
-          p.write_text(t)
-      - name: Remove non-workflow temporary helper scripts
-        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') != ''
-        run: rm -f tools/apply-pre-ms-hardening.py tools/pre-ms-update-docs.py tools/create-pre-ms-detached.py
-      - name: Commit materialized source candidate
-        run: |
-          git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c docs/FEATURE_SUPPORT.md windows/test/Test-FilesystemContracts.ps1
-          git add -u tools
-          git diff --cached --check
-          if git diff --cached --quiet; then echo 'Source already materialized; no-op.'; exit 0; fi
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
-          git push origin HEAD:pre-ms-qualification-temp
-
   portable:
-    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
       - name: GCC warnings-as-errors and unit tests
         run: |
           make clean
           make all
           ./build/test-extfs
+
       - name: Real ext2/ext3/ext4 image qualification
         run: make integration
+
       - name: Filesystem contract regression checks
-        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') != ''
         shell: pwsh
         run: .\windows\test\Test-FilesystemContracts.ps1
+
       - name: CMake and CTest
         run: |
           cmake -S . -B build-cmake
           cmake --build build-cmake
           ctest --test-dir build-cmake --output-on-failure
+
       - name: ASan and UBSan
         run: |
           make clean
           make all CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
           ./build/test-extfs
+
       - name: Clang warnings-as-errors
         run: |
           make clean
           make all CC=clang
           ./build/test-extfs
+
       - name: GCC static analyzer
-        run: gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude -c core/extfs.c -o /tmp/extfs-fanalyzer.o
+        run: |
+          gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude \
+              -c core/extfs.c -o /tmp/extfs-fanalyzer.o
+
       - name: Clang static analyzer
-        run: clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
+        run: |
+          clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
+
       - name: Shell and XML syntax
         shell: bash
         run: |
@@ -94,19 +66,24 @@ jobs:
           import xml.etree.ElementTree as ET
           ET.parse('windows/driver/extfs.vcxproj')
           ET.parse('packages.config')
+          print('Shell and XML syntax checks passed')
           PY
+
       - name: PowerShell syntax
         shell: pwsh
         run: |
-          $scripts=@('windows/Build-And-Validate.ps1','windows/Build-ExperimentalSetup.ps1','windows/installer/Install-ExtFS.ps1','windows/installer/Uninstall-ExtFS.ps1','windows/test/Test-ExtFS.ps1','windows/test/Collect-Diagnostics.ps1','windows/test/Enable-DriverVerifier.ps1','windows/test/Disable-DriverVerifier.ps1')
-          if (Test-Path 'windows/test/Test-FilesystemContracts.ps1') { $scripts += 'windows/test/Test-FilesystemContracts.ps1' }
-          foreach ($script in $scripts) { [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw)) }
-
-  cleanup-pre-ms-branch:
-    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete temporary qualification branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/pre-ms-qualification-temp"
+          $scripts = @(
+            'windows/Build-And-Validate.ps1',
+            'windows/Build-ExperimentalSetup.ps1',
+            'windows/installer/Install-ExtFS.ps1',
+            'windows/installer/Uninstall-ExtFS.ps1',
+            'windows/test/Test-ExtFS.ps1',
+            'windows/test/Test-FilesystemContracts.ps1',
+            'windows/test/Collect-Diagnostics.ps1',
+            'windows/test/Enable-DriverVerifier.ps1',
+            'windows/test/Disable-DriverVerifier.ps1'
+          )
+          foreach ($script in $scripts) {
+            [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw))
+          }
+          Write-Host 'PowerShell syntax checks passed'
