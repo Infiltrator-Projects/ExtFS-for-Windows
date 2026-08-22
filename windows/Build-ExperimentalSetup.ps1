@@ -16,7 +16,7 @@ $inf = Join-Path $release 'extfs.inf'
 $catalog = Join-Path $release 'extfs.cat'
 $certificateFile = Join-Path $release 'extfs-test.cer'
 $buildScript = Join-Path $PSScriptRoot 'Build-And-Validate.ps1'
-$packageVersion = '0.9.5'
+$packageVersion = '0.9.6'
 
 function Find-WindowsKitTool {
     param([Parameter(Mandatory)][string]$Name)
@@ -95,15 +95,11 @@ function Invoke-BoundedSignatureInspection {
     if ($Catalog -and $result.Output -notmatch 'File is signed in catalog:') {
         throw "Catalog membership was not confirmed for $File."
     }
-    if (-not $Catalog -and
-        $result.SignerThumbprint -ne $ExpectedThumbprint) {
+    if (-not $Catalog -and $result.SignerThumbprint -ne $ExpectedThumbprint) {
         throw "Signer thumbprint mismatch for $File; found '$($result.SignerThumbprint)'."
     }
     if ($result.ExitCode -eq 0) { return }
 
-    # The package is intentionally self-signed. An untrusted-root result is
-    # acceptable only after SignTool has validated the file/signature/catalog
-    # far enough to reach chain policy. Every other nonzero result remains fatal.
     $untrustedRoot = (
         $result.Output -match 'terminated in a root' -and
         $result.Output -match 'certificate which is not trusted'
@@ -149,8 +145,6 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $driver).Hash -eq $unsignedDriv
     throw "Signing did not change $driver; refusing to package an unsigned driver."
 }
 
-# The catalog must hash the final signed SYS. Regenerate it after embedded
-# signing, then sign the catalog itself.
 Remove-Item -LiteralPath $catalog -Force
 $inf2catOs = if ($Platform -eq 'ARM64') {
     '10_VB_ARM64,10_CO_ARM64,10_NI_ARM64,10_GE_ARM64,10_25H2_ARM64'
@@ -169,8 +163,6 @@ if ((Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash -eq $unsignedCat
     throw "Signing did not change $catalog; refusing to package an unsigned catalog."
 }
 
-# Inspect embedded signatures and catalog membership without mutating either
-# the user or machine trust store. Each inspection is isolated and bounded.
 foreach ($file in @($driver, $catalog)) {
     Invoke-BoundedSignatureInspection -Tool $signtool -File $file `
         -ExpectedThumbprint $cert.Thumbprint
