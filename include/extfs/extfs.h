@@ -23,7 +23,7 @@ typedef signed long long   extfs_s64;
 
 #define EXTFS_VERSION_MAJOR 0
 #define EXTFS_VERSION_MINOR 9
-#define EXTFS_VERSION_PATCH 2
+#define EXTFS_VERSION_PATCH 3
 
 #define EXTFS_SUPERBLOCK_SIZE 1024U
 #define EXTFS_MAX_BLOCK_SIZE  65536U

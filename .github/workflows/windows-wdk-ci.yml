@@ -32,6 +32,10 @@ jobs:
         shell: powershell
         run: .\windows\test\Test-InstallerContract.ps1
 
+      - name: Verify filesystem contracts
+        shell: powershell
+        run: .\windows\test\Test-FilesystemContracts.ps1
+
       - name: Locate NuGet
         timeout-minutes: 5
         shell: powershell
@@ -78,7 +82,6 @@ jobs:
           if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
           $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
           if ($version -ne '0.9.5.0') { throw "Installer version mismatch: expected 0.9.5.0, found '$version'." }
-          # 0.9.5 is an installer-only hotfix; the already-qualified driver payload remains 0.9.3.0.
           $driverVer = Get-Content -LiteralPath 'release\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
           if (($driverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Staged INF version mismatch: '$driverVer'." }
           $report = Get-Content -LiteralPath 'release\driver\build-report.txt' -Raw

@@ -32,6 +32,9 @@
 | JBD2 checksum v2/v3 | Transaction writer supports | CRC32C only |
 | JBD2 async/fast commit/checksum v1 | Refused | Not implemented |
 | Paging writes | Refused | Cached/paging writer not qualified |
-| Volume lock/unlock | Refused | Exclusive lock ownership/enforcement not implemented |
+| Volume lock/unlock | Implemented | Direct volume handle only; lock succeeds only when no ordinary opens or mapped-section FCBs remain; ownership follows the issuing FILE_OBJECT and releases on unlock/cleanup |
 | `meta_bg`, `bigalloc`, inline data, encrypted/casefold | Refused for mutation | Layout not implemented |
 | MMP | Refused for writes | Multi-mount protection not implemented |
+
+| Locked-volume dismount | Implemented bounded path | `FSCTL_DISMOUNT_VOLUME` requires the issuing handle to own an ExtFS volume lock; unlocked forced-dismount teardown remains deferred |
+| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration surfaces a name-conversion error rather than silently hiding a live entry |

@@ -5,7 +5,6 @@ on:
   push:
     branches:
       - main
-      - hardening/v0.9.2
   pull_request:
 
 permissions:
@@ -27,6 +26,10 @@ jobs:
 
       - name: Real ext2/ext3/ext4 image qualification
         run: make integration
+
+      - name: Filesystem contract regression checks
+        shell: pwsh
+        run: .\windows\test\Test-FilesystemContracts.ps1
 
       - name: CMake and CTest
         run: |
@@ -75,6 +78,7 @@ jobs:
             'windows/installer/Install-ExtFS.ps1',
             'windows/installer/Uninstall-ExtFS.ps1',
             'windows/test/Test-ExtFS.ps1',
+            'windows/test/Test-FilesystemContracts.ps1',
             'windows/test/Collect-Diagnostics.ps1',
             'windows/test/Enable-DriverVerifier.ps1',
             'windows/test/Disable-DriverVerifier.ps1'

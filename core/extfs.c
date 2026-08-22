@@ -4605,6 +4605,7 @@ const char *extfs_status_string(extfs_status status)
         case EXTFS_ERR_NOT_FOUND:        return "path not found";
         case EXTFS_ERR_NOT_DIRECTORY:    return "path component is not a directory";
         case EXTFS_ERR_IS_DIRECTORY:     return "requested object is a directory";
+        case EXTFS_ERR_NO_SPACE:        return "no space left on device";
         default:                         return "unknown error";
     }
 }
