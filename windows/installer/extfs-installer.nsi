@@ -19,16 +19,16 @@ ManifestSupportedOS all
 !error "TARGET_ARCH must be x64 or ARM64"
 !endif
 
-Name "ExtFS for Windows 0.9.5 Experimental (${TARGET_ARCH})"
-OutFile "ExtFS-for-Windows-0.9.5-experimental-${ARCH_SLUG}-setup.exe"
+Name "ExtFS for Windows 0.9.6 Experimental (${TARGET_ARCH})"
+OutFile "ExtFS-for-Windows-0.9.6-experimental-${ARCH_SLUG}-setup.exe"
 InstallDir "$PROGRAMFILES64\ExtFS"
 BrandingText "ExtFS Project"
 
-VIProductVersion "0.9.5.0"
+VIProductVersion "0.9.6.0"
 VIAddVersionKey "ProductName" "ExtFS for Windows"
 VIAddVersionKey "CompanyName" "Shannon Smith"
 VIAddVersionKey "FileDescription" "ExtFS experimental ${TARGET_ARCH} setup"
-VIAddVersionKey "FileVersion" "0.9.5.0"
+VIAddVersionKey "FileVersion" "0.9.6.0"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 
 !define MUI_ABORTWARNING
@@ -41,14 +41,11 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 !insertmacro MUI_UNPAGE_INSTFILES
 !insertmacro MUI_LANGUAGE "English"
 
-; Architecture is validated by Install-ExtFS.ps1 using the operating-system
-; architecture, then independently checked against the PE machine field of the
-; bundled driver. Do not perform a second NSIS precheck using a machine-scoped
-; PROCESSOR_ARCHITECTURE lookup: 0.9.4 proved that lookup can be empty on a
-; genuine x64 host and falsely reject the package before installation begins.
+; PowerShell performs the authoritative native-architecture, PE-machine,
+; ExtFS-specific reboot-state and test-signing checks.
 Function .onInit
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-        "ExtFS 0.9.5 is a test-only kernel-driver checkpoint. This release fixes native Windows architecture detection and carries the already-qualified 0.9.3 driver payload. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
+        "ExtFS 0.9.6 is a test-only kernel-driver checkpoint. This release fixes false pending-restart blocking while retaining ExtFS-specific reboot protection and the already-qualified 0.9.3 driver payload. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
         IDOK continue
     Abort
 continue:
@@ -75,7 +72,7 @@ Section "Install ExtFS" SecMain
     ${If} $0 == 3010
         SetRebootFlag true
         MessageBox MB_ICONINFORMATION|MB_OK \
-            "Windows test-signing mode was enabled. Restart Windows, then run this setup again to install and load ExtFS."
+            "ExtFS requires one Windows restart to complete a boot-policy or resident-driver transition. Restart Windows, then run this setup again."
         Quit
     ${ElseIf} $0 != 0
         MessageBox MB_ICONSTOP|MB_OK "ExtFS installation failed (exit $0).$\r$\n$\r$\n$1"
@@ -83,13 +80,13 @@ Section "Install ExtFS" SecMain
     ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayName" "ExtFS for Windows 0.9.5 Experimental (${TARGET_ARCH})"
+        "DisplayName" "ExtFS for Windows 0.9.6 Experimental (${TARGET_ARCH})"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "UninstallString" '"$INSTDIR\Uninstall-ExtFS.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "Publisher" "Shannon Smith"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayVersion" "0.9.5"
+        "DisplayVersion" "0.9.6"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
