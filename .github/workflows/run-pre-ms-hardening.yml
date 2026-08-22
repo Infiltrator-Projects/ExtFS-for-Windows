@@ -29,9 +29,14 @@ jobs:
           submodules: recursive
 
       - name: Apply audited source transformation
-        run: python3 tools/apply-pre-ms-hardening.py
+        id: transform
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tools/apply-pre-ms-hardening.py 2>&1 | tee "$RUNNER_TEMP/extfs-transform.log"
 
       - name: Update permanent qualification and exact support documentation
+        id: docs
         shell: python
         run: |
           from pathlib import Path
@@ -59,16 +64,21 @@ jobs:
           p.write_text(text)
 
       - name: Portable unit and real-image qualification
+        id: qualify
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
-          make clean
-          make
-          ./build/test-extfs
-          make integration
-          pwsh -NoLogo -NoProfile -File windows/test/Test-FilesystemContracts.ps1
-          ./windows/build-cross-linux.sh
-          git diff --check
+          set -o pipefail
+          {
+            sudo apt-get update
+            sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+            make clean
+            make
+            ./build/test-extfs
+            make integration
+            pwsh -NoLogo -NoProfile -File windows/test/Test-FilesystemContracts.ps1
+            ./windows/build-cross-linux.sh
+            git diff --check
+          } 2>&1 | tee "$RUNNER_TEMP/extfs-qualification.log"
 
       - name: Publish qualified source change to main
         id: publish
@@ -88,12 +98,26 @@ jobs:
         run: |
           gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Portable, real-image, contract and cross-build qualification passed. Source hardening commit: ${{ steps.publish.outputs.source_sha }}. Starting WDK x64 + ARM64 qualification."
 
-      - name: Report portable failure
+      - name: Report portable failure with diagnostics
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS hardening stopped before publication: the source transformation or portable qualification failed. No hardening source commit was pushed by this run."
+          report="$RUNNER_TEMP/extfs-failure.txt"
+          {
+            echo "Pre-MS hardening stopped before publication. No hardening source commit was pushed by this run."
+            echo
+            echo "Stage outcomes: transform=${{ steps.transform.outcome }}, docs=${{ steps.docs.outcome }}, qualify=${{ steps.qualify.outcome }}, publish=${{ steps.publish.outcome }}"
+            for log in "$RUNNER_TEMP/extfs-transform.log" "$RUNNER_TEMP/extfs-qualification.log"; do
+              if [ -f "$log" ]; then
+                echo
+                echo "--- $(basename "$log") tail ---"
+                tail -n 100 "$log"
+              fi
+            done
+          } > "$report"
+          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file "$report"
 
   wdk:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
