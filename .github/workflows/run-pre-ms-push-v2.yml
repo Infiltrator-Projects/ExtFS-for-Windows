@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Triggered observable one-shot; qualified candidate removes this file.
 name: Observable detached pre-MS ExtFS qualification
 
 on:
