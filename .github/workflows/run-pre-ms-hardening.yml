@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# Retriggered after the workflow existed on main so GitHub evaluates this push.
 name: Execute pre-MS filesystem hardening
 
 on:
