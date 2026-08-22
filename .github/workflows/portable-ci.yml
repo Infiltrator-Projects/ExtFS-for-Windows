@@ -8,7 +8,7 @@ on:
   pull_request:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   portable:
@@ -96,3 +96,13 @@ jobs:
             [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw))
           }
           Write-Host 'PowerShell syntax checks passed'
+
+  cleanup-qualification-branch:
+    needs: portable
+    if: github.event_name == 'pull_request' && github.head_ref == 'single-indirect-qualification'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary qualification branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/single-indirect-qualification"
