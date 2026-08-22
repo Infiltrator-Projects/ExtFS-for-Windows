@@ -223,52 +223,79 @@ replace_once("windows/driver/extfs_driver.c",
             break;''')
 
 # Existing file objects cannot continue normal filesystem I/O after a locked dismount.
-p = Path("windows/driver/extfs_driver.c")
-text = p.read_text()
-old = '''    if (fcb == NULL || fcb->VolumeOpen) {
+replace_once("windows/driver/extfs_driver.c",
+'''    if (fcb == NULL || fcb->VolumeOpen) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
     }
-    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {'''
-if old not in text:
-    raise SystemExit("read guard anchor missing")
-text = text.replace(old, '''    if (fcb == NULL || fcb->VolumeOpen) {
+    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {''',
+'''    if (fcb == NULL || fcb->VolumeOpen) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
     }
     if (fcb->Vcb->Dismounted)
         return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
-    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {''', 1)
-old = '''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
+    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {''')
+
+replace_once("windows/driver/extfs_driver.c",
+'''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
-    if (!fcb->Vcb->WriteEnabled)'''
-if text.count(old) < 2:
-    raise SystemExit("write/set-information guard anchors missing")
-new = '''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
+    if (!fcb->Vcb->WriteEnabled)''',
+'''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
     if (fcb->Vcb->Dismounted)
         return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
-    if (!fcb->Vcb->WriteEnabled)'''
-text = text.replace(old, new, 2)
-old = '''    if (fcb == NULL || ccb == NULL || buffer == NULL) {
+    if (!fcb->Vcb->WriteEnabled)''')
+
+replace_once("windows/driver/extfs_driver.c",
+'''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
+        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
+    if (informationClass != FileEndOfFileInformation)''',
+'''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
+        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
+    if (fcb->Vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
+    if (informationClass != FileEndOfFileInformation)''')
+
+replace_once("windows/driver/extfs_driver.c",
+'''    if (fcb == NULL || ccb == NULL || buffer == NULL) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);
     }
-    ExtfsZeroMemory(buffer, length);'''
-if text.count(old) != 1:
-    raise SystemExit("query-information guard anchor missing")
-text = text.replace(old, '''    if (fcb == NULL || ccb == NULL || buffer == NULL) {
+    ExtfsZeroMemory(buffer, length);''',
+'''    if (fcb == NULL || ccb == NULL || buffer == NULL) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);
     }
     if (fcb->Vcb->Dismounted)
         return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
-    ExtfsZeroMemory(buffer, length);''', 1)
-old = '''    if (fcb == NULL || ccb == NULL ||
-        extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||'''
-if text.count(old) != 1:
-    raise SystemExit("directory-control guard anchor missing")
-text = text.replace(old, '''    if (fcb != NULL && fcb->Vcb->Dismounted)
+    ExtfsZeroMemory(buffer, length);''')
+
+replace_once("windows/driver/extfs_driver.c",
+'''    if (vcb == NULL || buffer == NULL) {
+        return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);
+    }
+    ExtfsZeroMemory(buffer, length);''',
+'''    if (vcb == NULL || buffer == NULL) {
+        return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);
+    }
+    if (vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
+    ExtfsZeroMemory(buffer, length);''')
+
+replace_once("windows/driver/extfs_driver.c",
+'''    if (fcb == NULL || ccb == NULL ||
+        extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||''',
+'''    if (fcb != NULL && fcb->Vcb->Dismounted)
         return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     if (fcb == NULL || ccb == NULL ||
-        extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||''', 1)
-p.write_text(text)
+        extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||''')
+
+replace_once("windows/driver/extfs_driver.c",
+'''    if (vcb == NULL) return ExtfsCompleteIrp(Irp,
+                                             STATUS_INVALID_DEVICE_REQUEST, 0U);
+    IoSkipCurrentIrpStackLocation(Irp);''',
+'''    if (vcb == NULL) return ExtfsCompleteIrp(Irp,
+                                             STATUS_INVALID_DEVICE_REQUEST, 0U);
+    if (vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
+    IoSkipCurrentIrpStackLocation(Irp);''')
 
 Path("windows/test/Test-FilesystemContracts.ps1").write_text(r'''# SPDX-License-Identifier: GPL-3.0-or-later
 $ErrorActionPreference = 'Stop'
@@ -277,10 +304,11 @@ $driver = Get-Content -LiteralPath (Join-Path $root 'windows\driver\extfs_driver
 $header = Get-Content -LiteralPath (Join-Path $root 'windows\driver\extfs_driver.h') -Raw
 $core = Get-Content -LiteralPath (Join-Path $root 'core\extfs.c') -Raw
 $coreHeader = Get-Content -LiteralPath (Join-Path $root 'include\extfs\extfs.h') -Raw
-foreach ($token in @('VolumeLockFileObject','VPB_LOCKED','ExtfsLockMountedVolume','ExtfsUnlockMountedVolume','ExtfsDismountLockedVolume','FSCTL_DISMOUNT_VOLUME','NameStatus')) {
+foreach ($token in @('VolumeLockFileObject','VPB_LOCKED','ExtfsLockMountedVolume','ExtfsUnlockMountedVolume','ExtfsDismountLockedVolume','FSCTL_DISMOUNT_VOLUME','NameStatus','STATUS_VOLUME_DISMOUNTED')) {
     if ($driver -notmatch [regex]::Escape($token) -and $header -notmatch [regex]::Escape($token)) { throw "Missing filesystem contract: $token" }
 }
 if ($coreHeader -notmatch '#define EXTFS_VERSION_PATCH 3') { throw 'Portable core version is not 0.9.3.' }
 if ($core -notmatch 'EXTFS_ERR_NO_SPACE:\s*return "no space left on device"') { throw 'NO_SPACE status text is missing.' }
+if ($driver -notmatch 'pick->NameStatus = status') { throw 'Invalid ext byte names can still be silently skipped.' }
 Write-Host 'Filesystem lifecycle/name/version contracts: PASS'
 ''')
