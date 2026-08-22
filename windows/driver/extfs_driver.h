@@ -40,6 +40,7 @@ typedef struct _EXTFS_VCB {
     LIST_ENTRY FcbList;
     volatile LONG OpenHandleCount;
     volatile LONG FileObjectCount;
+    PFILE_OBJECT VolumeLockFileObject;
     BOOLEAN Dismounted;
     BOOLEAN WriteEnabled;
 } EXTFS_VCB, *PEXTFS_VCB;

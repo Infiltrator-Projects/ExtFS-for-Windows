@@ -63,6 +63,7 @@ typedef struct _EXTFS_DIRENT_PICK {
     USHORT PatternLength;
     BOOLEAN CaseSensitive;
     BOOLEAN Found;
+    NTSTATUS NameStatus;
 } EXTFS_DIRENT_PICK, *PEXTFS_DIRENT_PICK;
 
 static PDEVICE_OBJECT ExtfsControlDevice;
@@ -395,6 +396,13 @@ static VOID ExtfsCleanupFileObject(PFILE_OBJECT FileObject)
     ExtfsAcquireFcbList(fcb->Vcb);
     IoRemoveShareAccess(FileObject, &fcb->ShareAccess);
     if (fcb->HandleCount > 0) --fcb->HandleCount;
+    if (fcb->VolumeOpen && fcb->Vcb->VolumeLockFileObject == FileObject) {
+        KIRQL savedIrql;
+        IoAcquireVpbSpinLock(&savedIrql);
+        fcb->Vcb->Vpb->Flags &= (USHORT)~VPB_LOCKED;
+        IoReleaseVpbSpinLock(savedIrql);
+        fcb->Vcb->VolumeLockFileObject = NULL;
+    }
     ccb->CleanupComplete = TRUE;
     InterlockedDecrement(&fcb->Vcb->OpenHandleCount);
     ExtfsReleaseFcbList(fcb->Vcb);
@@ -1425,6 +1433,8 @@ NTSTATUS ExtfsDispatchRead(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (fcb == NULL || fcb->VolumeOpen) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
     }
+    if (fcb->Vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {
         return ExtfsCompleteIrp(Irp, STATUS_FILE_IS_A_DIRECTORY, 0U);
     }
@@ -1514,6 +1524,8 @@ NTSTATUS ExtfsDispatchWrite(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
     if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
+    if (fcb->Vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     if (!fcb->Vcb->WriteEnabled)
         return ExtfsCompleteIrp(Irp, STATUS_MEDIA_WRITE_PROTECTED, 0U);
     if (extfs_inode_type(&fcb->Inode) != EXTFS_NODE_REGULAR)
@@ -1612,6 +1624,8 @@ NTSTATUS ExtfsDispatchSetInformation(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 
     if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);
+    if (fcb->Vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     if (informationClass != FileEndOfFileInformation)
         return ExtfsCompleteIrp(Irp, STATUS_MEDIA_WRITE_PROTECTED, 0U);
     if (!fcb->Vcb->WriteEnabled)
@@ -1670,6 +1684,8 @@ NTSTATUS ExtfsDispatchQueryInformation(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (fcb == NULL || ccb == NULL || buffer == NULL) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);
     }
+    if (fcb->Vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     ExtfsZeroMemory(buffer, length);
     switch (informationClass) {
         case FileAllInformation:
@@ -1863,6 +1879,8 @@ NTSTATUS ExtfsDispatchQueryVolumeInformation(PDEVICE_OBJECT DeviceObject,
     if (vcb == NULL || buffer == NULL) {
         return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);
     }
+    if (vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     ExtfsZeroMemory(buffer, length);
     switch (informationClass) {
         case FileFsVolumeInformation:
@@ -1975,8 +1993,13 @@ static int ExtfsPickDirectoryEntry(void *User, extfs_u32 InodeNumber,
     if (pick->CurrentIndex++ < pick->StartIndex) return 0;
     status = ExtfsUtf8ToUnicode(Name, NameLength, unicode,
                                 EXTFS_MAX_NAME_LENGTH, &unicodeLength);
-    if (!NT_SUCCESS(status) ||
-        !ExtfsWildcardMatch(pick->Pattern, pick->PatternLength,
+    if (!NT_SUCCESS(status)) {
+        /* ext directory names are raw bytes. Never make a live entry silently
+         * disappear merely because Windows cannot represent it as UTF-16. */
+        pick->NameStatus = status;
+        return 1;
+    }
+    if (!ExtfsWildcardMatch(pick->Pattern, pick->PatternLength,
                             unicode, unicodeLength, pick->CaseSensitive)) {
         return 0;
     }
@@ -2006,6 +2029,7 @@ static NTSTATUS ExtfsFindDirectoryEntry(PEXTFS_FCB Fcb, PEXTFS_CCB Ccb,
                                      Scratch, Fcb->Vcb->Volume.block_size);
     if (status != EXTFS_OK && status != EXTFS_STOP)
         return ExtfsStatusToNt(status);
+    if (!NT_SUCCESS(Pick->NameStatus)) return Pick->NameStatus;
     return Pick->Found ? STATUS_SUCCESS : STATUS_NO_MORE_FILES;
 }
 
@@ -2123,6 +2147,8 @@ NTSTATUS ExtfsDispatchDirectoryControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     if (stack->MinorFunction != IRP_MN_QUERY_DIRECTORY) {
         return ExtfsCompleteIrp(Irp, STATUS_NOT_SUPPORTED, 0U);
     }
+    if (fcb != NULL && fcb->Vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     if (fcb == NULL || ccb == NULL ||
         extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||
         ExtfsDirectoryBaseLength(informationClass) == 0U) {
@@ -2401,6 +2427,119 @@ static NTSTATUS ExtfsVerifyMountedVolume(PEXTFS_VCB Vcb)
     return STATUS_SUCCESS;
 }
 
+static NTSTATUS ExtfsLockMountedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObject)
+{
+    PEXTFS_FCB ownerFcb = ExtfsFcbFromFile(FileObject);
+    LIST_ENTRY reapList;
+    PLIST_ENTRY entry;
+    NTSTATUS status = STATUS_ACCESS_DENIED;
+    KIRQL savedIrql;
+
+    if (ownerFcb == NULL || ownerFcb->Vcb != Vcb || !ownerFcb->VolumeOpen)
+        return STATUS_INVALID_PARAMETER;
+
+    InitializeListHead(&reapList);
+    ExtfsAcquireFcbList(Vcb);
+    ExtfsCollectReapableFcbsLocked(Vcb, &reapList, FALSE);
+    if (Vcb->Dismounted) {
+        status = STATUS_VOLUME_DISMOUNTED;
+        goto ExitLocked;
+    }
+    if (Vcb->VolumeLockFileObject != NULL ||
+        Vcb->OpenHandleCount != 1 || Vcb->FileObjectCount != 1)
+        goto ExitLocked;
+
+    for (entry = Vcb->FcbList.Flink; entry != &Vcb->FcbList; entry = entry->Flink) {
+        PEXTFS_FCB fcb = CONTAINING_RECORD(entry, EXTFS_FCB, Links);
+        if (fcb != ownerFcb) goto ExitLocked;
+    }
+
+    IoAcquireVpbSpinLock(&savedIrql);
+    if ((Vcb->Vpb->Flags & VPB_LOCKED) == 0U) {
+        Vcb->Vpb->Flags |= VPB_LOCKED;
+        Vcb->VolumeLockFileObject = FileObject;
+        status = STATUS_SUCCESS;
+    }
+    IoReleaseVpbSpinLock(savedIrql);
+
+ExitLocked:
+    ExtfsReleaseFcbList(Vcb);
+    ExtfsDestroyFcbList(&reapList);
+
+    if (NT_SUCCESS(status) && Vcb->WriteEnabled) {
+        NTSTATUS flushStatus = ExtfsFlushLowerDevice(&Vcb->Reader);
+        if (!NT_SUCCESS(flushStatus)) {
+            ExtfsAcquireFcbList(Vcb);
+            if (Vcb->VolumeLockFileObject == FileObject) {
+                IoAcquireVpbSpinLock(&savedIrql);
+                Vcb->Vpb->Flags &= (USHORT)~VPB_LOCKED;
+                IoReleaseVpbSpinLock(savedIrql);
+                Vcb->VolumeLockFileObject = NULL;
+            }
+            ExtfsReleaseFcbList(Vcb);
+            status = flushStatus;
+        }
+    }
+    return status;
+}
+
+static NTSTATUS ExtfsUnlockMountedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObject)
+{
+    PEXTFS_FCB ownerFcb = ExtfsFcbFromFile(FileObject);
+    NTSTATUS status = STATUS_NOT_LOCKED;
+    KIRQL savedIrql;
+
+    if (ownerFcb == NULL || ownerFcb->Vcb != Vcb || !ownerFcb->VolumeOpen)
+        return STATUS_INVALID_PARAMETER;
+
+    ExtfsAcquireFcbList(Vcb);
+    if (Vcb->VolumeLockFileObject == FileObject) {
+        IoAcquireVpbSpinLock(&savedIrql);
+        Vcb->Vpb->Flags &= (USHORT)~VPB_LOCKED;
+        IoReleaseVpbSpinLock(savedIrql);
+        Vcb->VolumeLockFileObject = NULL;
+        status = STATUS_SUCCESS;
+    }
+    ExtfsReleaseFcbList(Vcb);
+    return status;
+}
+
+static NTSTATUS ExtfsDismountLockedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObject)
+{
+    PEXTFS_FCB ownerFcb = ExtfsFcbFromFile(FileObject);
+    NTSTATUS status;
+    KIRQL savedIrql;
+
+    if (ownerFcb == NULL || ownerFcb->Vcb != Vcb || !ownerFcb->VolumeOpen)
+        return STATUS_INVALID_PARAMETER;
+
+    ExtfsAcquireFcbList(Vcb);
+    if (Vcb->VolumeLockFileObject != FileObject) {
+        ExtfsReleaseFcbList(Vcb);
+        return STATUS_ACCESS_DENIED;
+    }
+    if (Vcb->Dismounted) {
+        ExtfsReleaseFcbList(Vcb);
+        return STATUS_VOLUME_DISMOUNTED;
+    }
+    ExtfsReleaseFcbList(Vcb);
+
+    status = Vcb->WriteEnabled ? ExtfsFlushLowerDevice(&Vcb->Reader) : STATUS_SUCCESS;
+    if (!NT_SUCCESS(status)) return status;
+
+    ExtfsAcquireFcbList(Vcb);
+    if (Vcb->VolumeLockFileObject != FileObject) {
+        ExtfsReleaseFcbList(Vcb);
+        return STATUS_ACCESS_DENIED;
+    }
+    Vcb->Dismounted = TRUE;
+    IoAcquireVpbSpinLock(&savedIrql);
+    Vcb->Vpb->Flags &= (USHORT)~VPB_MOUNTED;
+    IoReleaseVpbSpinLock(savedIrql);
+    ExtfsReleaseFcbList(Vcb);
+    return STATUS_SUCCESS;
+}
+
 NTSTATUS ExtfsDispatchFileSystemControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
 {
     PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(Irp);
@@ -2439,10 +2578,13 @@ NTSTATUS ExtfsDispatchFileSystemControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
             }
             break;
         case FSCTL_LOCK_VOLUME:
+            status = ExtfsLockMountedVolume(vcb, stack->FileObject);
+            break;
         case FSCTL_UNLOCK_VOLUME:
-            /* Exclusive lock ownership is not implemented yet; refusing the
-             * operation is safer than setting VPB_LOCKED without enforcement. */
-            status = STATUS_NOT_SUPPORTED;
+            status = ExtfsUnlockMountedVolume(vcb, stack->FileObject);
+            break;
+        case FSCTL_DISMOUNT_VOLUME:
+            status = ExtfsDismountLockedVolume(vcb, stack->FileObject);
             break;
         default:
             status = STATUS_NOT_SUPPORTED;
@@ -2456,6 +2598,8 @@ NTSTATUS ExtfsDispatchDeviceControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)
     PEXTFS_VCB vcb = ExtfsVcbFromDevice(DeviceObject);
     if (vcb == NULL) return ExtfsCompleteIrp(Irp,
                                              STATUS_INVALID_DEVICE_REQUEST, 0U);
+    if (vcb->Dismounted)
+        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);
     IoSkipCurrentIrpStackLocation(Irp);
     return IoCallDriver(vcb->TargetDeviceObject, Irp);
 }
