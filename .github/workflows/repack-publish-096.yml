@@ -1,0 +1,140 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Repack and publish ExtFS 0.9.6
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  repack-publish:
+    if: startsWith(github.event.head_commit.message, 'Repack and publish ExtFS 0.9.6')
+    runs-on: windows-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify source contracts and Common 1.9.0
+        shell: powershell
+        run: |
+          if ((Get-Content -LiteralPath 'third_party\infiltratr-common\VERSION' -Raw).Trim() -ne '1.9.0') { throw 'Infiltratr Common is not pinned at 1.9.0.' }
+          .\windows\test\Test-InstallerContract.ps1
+
+      - name: Download and verify qualified 0.9.5 x64 payload
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $old = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
+          & gh release download v0.9.5 --repo $env:GITHUB_REPOSITORY --pattern $old --clobber
+          if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $old)) { throw 'Could not download the qualified 0.9.5 x64 installer.' }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $old).Hash
+          if ($hash -ne 'D2930581BAC7D212D4EE4C9CD65E227E43A2161FF7A138E85FB4824CB3A5E5EC') { throw "0.9.5 release payload hash mismatch: $hash" }
+
+          $sevenZip = (Get-Command 7z.exe -ErrorAction SilentlyContinue).Source
+          if (-not $sevenZip) { $sevenZip = 'C:\Program Files\7-Zip\7z.exe' }
+          if (-not (Test-Path -LiteralPath $sevenZip)) { throw '7-Zip is unavailable on the runner.' }
+          New-Item -ItemType Directory -Path repack -Force | Out-Null
+          & $sevenZip x -y "-orepack" $old | Out-Host
+          if ($LASTEXITCODE -ne 0) { throw 'Could not extract the qualified 0.9.5 installer payload.' }
+
+          New-Item -ItemType Directory -Path 'release\driver' -Force | Out-Null
+          foreach ($name in @('extfs.sys','extfs.inf','extfs.cat','extfs-test.cer')) {
+              $candidate = Get-ChildItem -LiteralPath repack -Filter $name -File -Recurse | Select-Object -First 1
+              if (-not $candidate) { throw "Qualified 0.9.5 payload is missing $name." }
+              Copy-Item -LiteralPath $candidate.FullName -Destination (Join-Path 'release\driver' $name) -Force
+          }
+
+          $infLine = Get-Content -LiteralPath 'release\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
+          if (($infLine -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Unexpected driver payload version: '$infLine'." }
+
+          $stream = [IO.File]::OpenRead((Resolve-Path 'release\driver\extfs.sys'))
+          $reader = [IO.BinaryReader]::new($stream)
+          try {
+              if ($reader.ReadUInt16() -ne 0x5A4D) { throw 'Qualified driver is not a PE image.' }
+              $stream.Position = 0x3c
+              $peOffset = $reader.ReadInt32()
+              $stream.Position = $peOffset
+              if ($reader.ReadUInt32() -ne 0x00004550) { throw 'Qualified driver PE signature is invalid.' }
+              $machine = $reader.ReadUInt16()
+              if ($machine -ne 0x8664) { throw ('Qualified driver is not x64: 0x{0:X4}' -f $machine) }
+          } finally {
+              $reader.Dispose(); $stream.Dispose()
+          }
+          Write-Host 'Qualified 0.9.5 x64 driver payload recovered unchanged.'
+
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath 'C:\Program Files (x86)\NSIS\makensis.exe')) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw 'NSIS installation failed.' }
+          }
+
+      - name: Build and verify 0.9.6 installer shell
+        shell: powershell
+        run: |
+          $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue).Source
+          if (-not $makensis) { $makensis = 'C:\Program Files (x86)\NSIS\makensis.exe' }
+          Push-Location 'windows\installer'
+          try {
+              & $makensis '/DTARGET_ARCH=x64' 'extfs-installer.nsi'
+              if ($LASTEXITCODE -ne 0) { throw "NSIS failed with exit code $LASTEXITCODE." }
+          } finally { Pop-Location }
+
+          $built = 'windows\installer\ExtFS-for-Windows-0.9.6-experimental-x64-setup.exe'
+          $setup = 'ExtFS-for-Windows-0.9.6-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $built)) { throw '0.9.6 installer was not produced.' }
+          Copy-Item -LiteralPath $built -Destination $setup -Force
+          $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
+          if ($version -ne '0.9.6.0') { throw "Installer version mismatch: '$version'." }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
+          "EXTFS_SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "0.9.6 installer SHA-256: $hash"
+
+      - name: Publish and verify v0.9.6
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = 'ExtFS-for-Windows-0.9.6-experimental-x64-setup.exe'
+          $notes = @"
+          ExtFS for Windows 0.9.6 fixes the 0.9.5 pending-restart preflight while carrying the exact already-qualified 0.9.5 x64 driver payload (ExtFS driver 0.9.3.0).
+
+          Fixed:
+          - unrelated Windows Update/CBS/pending-file restart state is advisory rather than fatal;
+          - ExtFS-specific pending file replacements still require a reboot;
+          - an ExtFS-requested TESTSIGNING change records the boot that requested it and requires one actual restart;
+          - retains the 0.9.5 x64 architecture fix and 0.9.4 service ImagePath fix.
+
+          Infiltratr Common: 1.9.0.
+          Installer SHA-256: $env:EXTFS_SETUP_SHA256
+          "@
+          Set-Content release-notes.md $notes -Encoding utf8
+          & gh release view v0.9.6 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+              & gh release upload v0.9.6 $setup --repo $env:GITHUB_REPOSITORY --clobber
+              if ($LASTEXITCODE -ne 0) { throw 'Could not replace the v0.9.6 installer asset.' }
+              & gh release edit v0.9.6 --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'ExtFS for Windows 0.9.6' --notes-file release-notes.md
+              if ($LASTEXITCODE -ne 0) { throw 'Could not update v0.9.6 release metadata.' }
+          } else {
+              & gh release create v0.9.6 $setup --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'ExtFS for Windows 0.9.6' --notes-file release-notes.md
+              if ($LASTEXITCODE -ne 0) { throw 'Could not create v0.9.6 release.' }
+          }
+          $release = & gh release view v0.9.6 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease | ConvertFrom-Json
+          $asset = @($release.assets | Where-Object name -eq $setup)
+          if ($release.tagName -ne 'v0.9.6' -or $release.name -ne 'ExtFS for Windows 0.9.6' -or $release.isDraft -or $release.isPrerelease -or $asset.Count -ne 1) { throw 'v0.9.6 publication verification failed.' }
+          Write-Host 'v0.9.6 published and verified.'
+
+      - name: Record publication receipt
+        shell: powershell
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit --allow-empty -m 'ExtFS 0.9.6 repack published'
+          git push origin HEAD:main
