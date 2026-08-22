@@ -53,7 +53,16 @@
     </ClCompile>
     <Link><AdditionalDependencies>ntoskrnl.lib;hal.lib;wmilib.lib;%(AdditionalDependencies)</AdditionalDependencies><AdditionalLibraryDirectories Condition="'$(Platform)'=='ARM64'">$(ExtfsArm64RuntimeDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories></Link>
   </ItemDefinitionGroup>
-  <ItemGroup><ClCompile Include="extfs_driver.c" /><ClCompile Include="..\..\core\extfs.c" /></ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="extfs_driver.c" />
+    <ClCompile Include="..\..\core\extfs.c">
+      <PreprocessorDefinitions>extfs_resize_file_ext2_direct=extfs_resize_file_ext2_legacy_direct;extfs_resize_file_ext3_journaled_direct=extfs_resize_file_ext3_journaled_legacy_direct;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\core\extfs_classic_resize.c">
+      <PreprocessorDefinitions>extfs_resize_file_ext2_direct=extfs_resize_file_ext2_single_indirect_impl;extfs_resize_file_ext3_journaled_direct=extfs_resize_file_ext3_single_indirect_impl;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+    <ClCompile Include="..\..\core\extfs_resize_dispatch.c" />
+  </ItemGroup>
   <ItemGroup><ClInclude Include="extfs_driver.h" /><ClInclude Include="..\..\include\extfs\extfs.h" /></ItemGroup>
   <ItemGroup><Inf Include="extfs.inf" /></ItemGroup>
   <ItemGroup><ResourceCompile Include="extfs.rc" Condition="'$(Platform)'=='x64'" /></ItemGroup>

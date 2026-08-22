@@ -10,8 +10,6 @@ mutator="$project_dir/build/extfs-mutate-test"
 stage_dir="$test_dir/stage"
 mutation_stage="$test_dir/mutation-stage"
 
-# Build a fixture that exercises ordinary files, nested paths, symlinks,
-# sparse mappings and enough directory entries to force ext4 HTree indexing.
 mkdir -p "$test_dir"
 rm -rf "$stage_dir" "$mutation_stage"
 mkdir -p "$stage_dir" "$mutation_stage"
@@ -56,23 +54,26 @@ for filesystem in ext2 ext3 ext4; do
     grep 'item-299.txt' "$test_dir/$filesystem-subdir.txt" > /dev/null
 done
 
-# Run actual ExtFS metadata mutation against real mke2fs images. The ext4 image
-# explicitly disables modern allocation/recovery/accounting features outside
-# the bounded 0.9 mutation gate. Refusing those features is part of the safety
-# design; the qualification fixture must not weaken the production gate.
+# Run actual ExtFS metadata mutation against real mke2fs images. ext2/ext3 grow
+# beyond the twelve 1 KiB direct blocks so CI exercises creation and later
+# removal of a real classic single-indirect block. The ext4 image keeps the
+# separately-qualified bounded extent-tree path.
 for filesystem in ext2 ext3 ext4; do
     image="$test_dir/$filesystem-mutation.img"
     expected_growth="$test_dir/$filesystem-expected-growth.bin"
     expected_shrink="$test_dir/$filesystem-expected-shrink.bin"
     extracted="$test_dir/$filesystem-mutated.bin"
+    growth_size=4096
     truncate -s 64M "$image"
 
     case "$filesystem" in
         ext2)
+            growth_size=13312
             mke2fs -q -F -t ext2 -b 1024 -E lazy_itable_init=0 \
                 -L EXTFS-MUT-EXT2 -d "$mutation_stage" "$image"
             ;;
         ext3)
+            growth_size=13312
             mke2fs -q -F -t ext3 -b 1024 \
                 -E lazy_itable_init=0,lazy_journal_init=0 \
                 -L EXTFS-MUT-EXT3 -d "$mutation_stage" "$image"
@@ -93,8 +94,8 @@ for filesystem in ext2 ext3 ext4; do
     fi
 
     cp "$fixture_dir/hello.txt" "$expected_growth"
-    truncate -s 4096 "$expected_growth"
-    "$mutator" resize "$image" /hello.txt 4096
+    truncate -s "$growth_size" "$expected_growth"
+    "$mutator" resize "$image" /hello.txt "$growth_size"
     if ! e2fsck -f -n "$image" > "$test_dir/$filesystem-after-growth-fsck.txt" 2>&1; then
         cat "$test_dir/$filesystem-after-growth-fsck.txt" >&2
         echo "$filesystem growth produced an inconsistent filesystem." >&2

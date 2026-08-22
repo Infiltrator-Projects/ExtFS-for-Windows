@@ -23,6 +23,7 @@ jobs:
           make clean
           make all
           ./build/test-extfs
+          ./build/test-single-indirect
 
       - name: Real ext2/ext3/ext4 image qualification
         run: make integration
@@ -42,21 +43,29 @@ jobs:
           make clean
           make all CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
           ./build/test-extfs
+          ./build/test-single-indirect
 
       - name: Clang warnings-as-errors
         run: |
           make clean
           make all CC=clang
           ./build/test-extfs
+          ./build/test-single-indirect
 
       - name: GCC static analyzer
         run: |
           gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude \
               -c core/extfs.c -o /tmp/extfs-fanalyzer.o
+          gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude \
+              -c core/extfs_classic_resize.c -o /tmp/extfs-classic-fanalyzer.o
+          gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude \
+              -c core/extfs_resize_dispatch.c -o /tmp/extfs-dispatch-fanalyzer.o
 
       - name: Clang static analyzer
         run: |
           clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
+          clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs_classic_resize.c
+          clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs_resize_dispatch.c
 
       - name: Shell and XML syntax
         shell: bash
