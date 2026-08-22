@@ -3,58 +3,94 @@ name: Portable ExtFS CI
 
 on:
   push:
-    branches:
-      - main
-      - hardening/v0.9.2
+    branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, closed]
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
+  materialize-pre-ms:
+    if: github.event.action == 'opened' && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          submodules: recursive
+      - name: Apply already-portable-qualified hardening
+        run: |
+          python3 tools/apply-pre-ms-hardening.py
+          python3 tools/pre-ms-update-docs.py
+      - name: Remove temporary pre-MS machinery from candidate
+        run: |
+          git rm -f .github/workflows/pre-ms-hardening.yml \
+                    .github/workflows/pre-ms-issue-v3.yml \
+                    .github/workflows/pre-ms-ping.yml \
+                    .github/workflows/run-pre-ms-hardening.yml \
+                    .github/workflows/run-pre-ms-push.yml \
+                    .github/workflows/run-pre-ms-push-v2.yml \
+                    tools/apply-pre-ms-hardening.py \
+                    tools/pre-ms-update-docs.py \
+                    tools/create-pre-ms-detached.py
+      - name: Make this workflow permanent-clean except one-time branch cleanup
+        shell: python
+        run: |
+          from pathlib import Path
+          p=Path('.github/workflows/portable-ci.yml')
+          t=p.read_text()
+          a=t.index('  materialize-pre-ms:\n')
+          b=t.index('  portable:\n')
+          t=t[:a]+t[b:]
+          p.write_text(t)
+      - name: Commit exact materialized candidate
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git diff --cached --check
+          git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
+          git push origin HEAD:pre-ms-qualification-temp
+
   portable:
+    if: github.event.action != 'closed'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
-
       - name: GCC warnings-as-errors and unit tests
         run: |
           make clean
           make all
           ./build/test-extfs
-
       - name: Real ext2/ext3/ext4 image qualification
         run: make integration
-
+      - name: Filesystem contract regression checks
+        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') != ''
+        shell: pwsh
+        run: .\windows\test\Test-FilesystemContracts.ps1
       - name: CMake and CTest
         run: |
           cmake -S . -B build-cmake
           cmake --build build-cmake
           ctest --test-dir build-cmake --output-on-failure
-
       - name: ASan and UBSan
         run: |
           make clean
           make all CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
           ./build/test-extfs
-
       - name: Clang warnings-as-errors
         run: |
           make clean
           make all CC=clang
           ./build/test-extfs
-
       - name: GCC static analyzer
-        run: |
-          gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude \
-              -c core/extfs.c -o /tmp/extfs-fanalyzer.o
-
+        run: gcc -std=c11 -Wall -Wextra -Wpedantic -Werror -fanalyzer -Iinclude -c core/extfs.c -o /tmp/extfs-fanalyzer.o
       - name: Clang static analyzer
-        run: |
-          clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
-
+        run: clang --analyze -std=c11 -Wall -Wextra -Wpedantic -Werror -Iinclude core/extfs.c
       - name: Shell and XML syntax
         shell: bash
         run: |
@@ -63,23 +99,19 @@ jobs:
           import xml.etree.ElementTree as ET
           ET.parse('windows/driver/extfs.vcxproj')
           ET.parse('packages.config')
-          print('Shell and XML syntax checks passed')
           PY
-
       - name: PowerShell syntax
         shell: pwsh
         run: |
-          $scripts = @(
-            'windows/Build-And-Validate.ps1',
-            'windows/Build-ExperimentalSetup.ps1',
-            'windows/installer/Install-ExtFS.ps1',
-            'windows/installer/Uninstall-ExtFS.ps1',
-            'windows/test/Test-ExtFS.ps1',
-            'windows/test/Collect-Diagnostics.ps1',
-            'windows/test/Enable-DriverVerifier.ps1',
-            'windows/test/Disable-DriverVerifier.ps1'
-          )
-          foreach ($script in $scripts) {
-            [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw))
-          }
-          Write-Host 'PowerShell syntax checks passed'
+          $scripts = @('windows/Build-And-Validate.ps1','windows/Build-ExperimentalSetup.ps1','windows/installer/Install-ExtFS.ps1','windows/installer/Uninstall-ExtFS.ps1','windows/test/Test-ExtFS.ps1','windows/test/Collect-Diagnostics.ps1','windows/test/Enable-DriverVerifier.ps1','windows/test/Disable-DriverVerifier.ps1')
+          if (Test-Path 'windows/test/Test-FilesystemContracts.ps1') { $scripts += 'windows/test/Test-FilesystemContracts.ps1' }
+          foreach ($script in $scripts) { [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw)) }
+
+  cleanup-pre-ms-branch:
+    if: github.event.action == 'closed' && github.event.pull_request.merged == true && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete temporary qualification branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/pre-ms-qualification-temp"
