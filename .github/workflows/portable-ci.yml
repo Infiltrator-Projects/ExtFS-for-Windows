@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   materialize-pre-ms:
-    if: github.event.action == 'opened' && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
+    if: github.event.action != 'closed' && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,37 +20,32 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
           submodules: recursive
-      - name: Apply already-portable-qualified hardening
-        run: |
-          python3 tools/apply-pre-ms-hardening.py
-          python3 tools/pre-ms-update-docs.py
-      - name: Remove temporary pre-MS machinery from candidate
-        run: |
-          git rm -f .github/workflows/pre-ms-hardening.yml \
-                    .github/workflows/pre-ms-issue-v3.yml \
-                    .github/workflows/pre-ms-ping.yml \
-                    .github/workflows/run-pre-ms-hardening.yml \
-                    .github/workflows/run-pre-ms-push.yml \
-                    .github/workflows/run-pre-ms-push-v2.yml \
-                    tools/apply-pre-ms-hardening.py \
-                    tools/pre-ms-update-docs.py \
-                    tools/create-pre-ms-detached.py
-      - name: Make this workflow permanent-clean except one-time branch cleanup
+      - name: Apply already-portable-qualified source hardening
+        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') == ''
+        run: python3 tools/apply-pre-ms-hardening.py
+      - name: Update feature-support documentation only
+        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') != ''
         shell: python
         run: |
           from pathlib import Path
-          p=Path('.github/workflows/portable-ci.yml')
-          t=p.read_text()
-          a=t.index('  materialize-pre-ms:\n')
-          b=t.index('  portable:\n')
-          t=t[:a]+t[b:]
+          p=Path('docs/FEATURE_SUPPORT.md'); t=p.read_text()
+          old='| Volume lock/unlock | Refused | Exclusive lock ownership/enforcement not implemented |'
+          new='| Volume lock/unlock | Implemented | Direct volume handle only; lock succeeds only when no ordinary opens or mapped-section FCBs remain; ownership follows the issuing FILE_OBJECT and releases on unlock/cleanup |'
+          if old in t: t=t.replace(old,new,1)
+          if 'Locked-volume dismount' not in t: t+='\n| Locked-volume dismount | Implemented bounded path | `FSCTL_DISMOUNT_VOLUME` requires the issuing handle to own an ExtFS volume lock; unlocked forced-dismount teardown remains deferred |\n'
+          if 'Unrepresentable raw ext names' not in t: t+='| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration surfaces a name-conversion error rather than silently hiding a live entry |\n'
           p.write_text(t)
-      - name: Commit exact materialized candidate
+      - name: Remove non-workflow temporary helper scripts
+        if: hashFiles('windows/test/Test-FilesystemContracts.ps1') != ''
+        run: rm -f tools/apply-pre-ms-hardening.py tools/pre-ms-update-docs.py tools/create-pre-ms-detached.py
+      - name: Commit materialized source candidate
         run: |
+          git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c docs/FEATURE_SUPPORT.md windows/test/Test-FilesystemContracts.ps1
+          git add -u tools
+          git diff --cached --check
+          if git diff --cached --quiet; then echo 'Source already materialized; no-op.'; exit 0; fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add -A
-          git diff --cached --check
           git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
           git push origin HEAD:pre-ms-qualification-temp
 
@@ -103,7 +98,7 @@ jobs:
       - name: PowerShell syntax
         shell: pwsh
         run: |
-          $scripts = @('windows/Build-And-Validate.ps1','windows/Build-ExperimentalSetup.ps1','windows/installer/Install-ExtFS.ps1','windows/installer/Uninstall-ExtFS.ps1','windows/test/Test-ExtFS.ps1','windows/test/Collect-Diagnostics.ps1','windows/test/Enable-DriverVerifier.ps1','windows/test/Disable-DriverVerifier.ps1')
+          $scripts=@('windows/Build-And-Validate.ps1','windows/Build-ExperimentalSetup.ps1','windows/installer/Install-ExtFS.ps1','windows/installer/Uninstall-ExtFS.ps1','windows/test/Test-ExtFS.ps1','windows/test/Collect-Diagnostics.ps1','windows/test/Enable-DriverVerifier.ps1','windows/test/Disable-DriverVerifier.ps1')
           if (Test-Path 'windows/test/Test-FilesystemContracts.ps1') { $scripts += 'windows/test/Test-FilesystemContracts.ps1' }
           foreach ($script in $scripts) { [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw)) }
 
