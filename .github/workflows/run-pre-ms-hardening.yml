@@ -9,24 +9,28 @@ permissions:
   contents: write
   issues: write
 
+env:
+  TRIGGER_TITLE: '[HAL] Run ExtFS pre-MS hardening'
+
 jobs:
   portable:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
     outputs:
-      source_sha: ${{ steps.publish.outputs.source_sha }}
+      source_sha: ${{ steps.detached.outputs.source_sha }}
+      base_sha: ${{ steps.detached.outputs.base_sha }}
+      patch_sha256: ${{ steps.detached.outputs.patch_sha256 }}
     steps:
-      - name: Announce start
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS hardening started on main at $GITHUB_SHA. Applying the audited lifecycle/name fixes, then running portable and real-image qualification."
-
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
+
+      - name: Announce start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS qualification started at $GITHUB_SHA. main will not move unless portable, real-image, cross-build and both WDK architectures pass."
 
       - name: Apply audited source transformation
         id: transform
@@ -35,12 +39,11 @@ jobs:
           set -o pipefail
           python3 tools/apply-pre-ms-hardening.py 2>&1 | tee "$RUNNER_TEMP/extfs-transform.log"
 
-      - name: Update permanent qualification and exact support documentation
+      - name: Update permanent qualification and support documentation
         id: docs
         shell: python
         run: |
           from pathlib import Path
-
           p = Path('.github/workflows/windows-wdk-ci.yml')
           text = p.read_text()
           needle = '      - name: Locate NuGet\n'
@@ -48,8 +51,7 @@ jobs:
           if check not in text:
               if needle not in text:
                   raise SystemExit('Windows WDK CI insertion point missing')
-              text = text.replace(needle, check + needle, 1)
-              p.write_text(text)
+              p.write_text(text.replace(needle, check + needle, 1))
 
           p = Path('docs/FEATURE_SUPPORT.md')
           text = p.read_text()
@@ -63,7 +65,7 @@ jobs:
               text += '| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration surfaces a name-conversion error rather than silently hiding a live entry |\n'
           p.write_text(text)
 
-      - name: Portable unit and real-image qualification
+      - name: Portable unit real-image contract and cross-build qualification
         id: qualify
         shell: bash
         run: |
@@ -80,25 +82,76 @@ jobs:
             git diff --check
           } 2>&1 | tee "$RUNNER_TEMP/extfs-qualification.log"
 
-      - name: Publish qualified source change to main
-        id: publish
+      - name: Build exact detached candidate and patch
+        id: detached
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
         run: |
-          git fetch origin main
-          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" || { echo 'main moved; refusing stale push'; exit 1; }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c windows/test/Test-FilesystemContracts.ps1 docs/FEATURE_SUPPORT.md .github/workflows/windows-wdk-ci.yml
-          git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
-          git push origin HEAD:main
-          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          set -euo pipefail
+          git rm -f tools/apply-pre-ms-hardening.py .github/workflows/pre-ms-hardening.yml .github/workflows/run-pre-ms-hardening.yml
+          mkdir -p "$RUNNER_TEMP/extfs-qualified"
+          git diff --binary HEAD > "$RUNNER_TEMP/extfs-qualified/qualified.patch"
+          patch_sha=$(sha256sum "$RUNNER_TEMP/extfs-qualified/qualified.patch" | awk '{print $1}')
+          export PATCH_SHA256="$patch_sha"
+          python3 - <<'PY'
+          import base64, json, os, pathlib, subprocess, urllib.request
+          repo = os.environ['GITHUB_REPOSITORY']
+          token = os.environ['GITHUB_TOKEN']
+          base = os.environ['GITHUB_SHA']
+          api = f'https://api.github.com/repos/{repo}'
+
+          def request(method, path, payload=None):
+              data = None if payload is None else json.dumps(payload).encode()
+              req = urllib.request.Request(api + path, data=data, method=method)
+              req.add_header('Authorization', f'Bearer {token}')
+              req.add_header('Accept', 'application/vnd.github+json')
+              req.add_header('X-GitHub-Api-Version', '2022-11-28')
+              with urllib.request.urlopen(req) as r:
+                  return json.load(r)
+
+          base_commit = request('GET', f'/git/commits/{base}')
+          entries = []
+          raw = subprocess.check_output(['git','diff','--name-status','-z','HEAD'])
+          fields = raw.decode().split('\0')
+          i = 0
+          while i < len(fields) and fields[i]:
+              status = fields[i]; i += 1
+              path = fields[i]; i += 1
+              if status.startswith('R') or status.startswith('C'):
+                  path = fields[i]; i += 1
+              if status.startswith('D'):
+                  entries.append({'path':path,'mode':'100644','type':'blob','sha':None})
+                  continue
+              content = pathlib.Path(path).read_bytes()
+              blob = request('POST','/git/blobs',{'content':base64.b64encode(content).decode(),'encoding':'base64'})
+              entries.append({'path':path,'mode':'100644','type':'blob','sha':blob['sha']})
+          tree = request('POST','/git/trees',{'base_tree':base_commit['tree']['sha'],'tree':entries})
+          commit = request('POST','/git/commits',{
+              'message':'Pre-MS hardening: lifecycle and filename correctness',
+              'tree':tree['sha'],
+              'parents':[base]
+          })
+          out = os.environ['GITHUB_OUTPUT']
+          with open(out,'a') as f:
+              f.write(f"source_sha={commit['sha']}\n")
+              f.write(f"base_sha={base}\n")
+              f.write(f"patch_sha256={os.environ['PATCH_SHA256']}\n")
+          print('Detached qualified candidate:', commit['sha'])
+          PY
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: extfs-pre-ms-qualified-patch
+          path: ${{ runner.temp }}/extfs-qualified/qualified.patch
+          if-no-files-found: error
 
       - name: Report portable success
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Portable, real-image, contract and cross-build qualification passed. Source hardening commit: ${{ steps.publish.outputs.source_sha }}. Starting WDK x64 + ARM64 qualification."
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Portable/real-image/contracts/cross-build PASS. Detached candidate: ${{ steps.detached.outputs.source_sha }}. Patch SHA-256: ${{ steps.detached.outputs.patch_sha256 }}. Starting WDK x64 + ARM64 against this exact patch."
 
-      - name: Report portable failure with diagnostics
+      - name: Report portable failure
         if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
@@ -106,15 +159,11 @@ jobs:
         run: |
           report="$RUNNER_TEMP/extfs-failure.txt"
           {
-            echo "Pre-MS hardening stopped before publication. No hardening source commit was pushed by this run."
-            echo
-            echo "Stage outcomes: transform=${{ steps.transform.outcome }}, docs=${{ steps.docs.outcome }}, qualify=${{ steps.qualify.outcome }}, publish=${{ steps.publish.outcome }}"
+            echo 'Pre-MS qualification stopped before main moved.'
+            echo "Stage outcomes: transform=${{ steps.transform.outcome }}, docs=${{ steps.docs.outcome }}, qualify=${{ steps.qualify.outcome }}, detached=${{ steps.detached.outcome }}"
             for log in "$RUNNER_TEMP/extfs-transform.log" "$RUNNER_TEMP/extfs-qualification.log"; do
-              if [ -f "$log" ]; then
-                echo
-                echo "--- $(basename "$log") tail ---"
-                tail -n 100 "$log"
-              fi
+              [ -f "$log" ] || continue
+              echo; echo "--- $(basename "$log") tail ---"; tail -n 120 "$log"
             done
           } > "$report"
           gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file "$report"
@@ -123,7 +172,7 @@ jobs:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
     needs: portable
     runs-on: windows-latest
-    timeout-minutes: 55
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -131,9 +180,25 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ needs.portable.outputs.source_sha }}
+          ref: ${{ needs.portable.outputs.base_sha }}
           fetch-depth: 0
           submodules: recursive
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: extfs-pre-ms-qualified-patch
+          path: ${{ runner.temp }}\extfs-qualified
+
+      - name: Apply exact qualified patch
+        shell: powershell
+        run: |
+          $patch = Join-Path $env:RUNNER_TEMP 'extfs-qualified\qualified.patch'
+          $actual = (Get-FileHash -Algorithm SHA256 -LiteralPath $patch).Hash.ToLowerInvariant()
+          if ($actual -ne '${{ needs.portable.outputs.patch_sha256 }}') { throw "Patch hash mismatch: $actual" }
+          git apply --binary $patch
+          if ($LASTEXITCODE -ne 0) { throw "git apply failed with exit code $LASTEXITCODE" }
+          git diff --check
+          if ($LASTEXITCODE -ne 0) { throw 'Qualified patch failed git diff --check.' }
 
       - name: Verify filesystem and installer contracts
         shell: powershell
@@ -145,8 +210,7 @@ jobs:
         timeout-minutes: 5
         shell: powershell
         run: |
-          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
-          if (-not $nuget) {
+          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) {
               choco install nuget.commandline -y --no-progress
               if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
           }
@@ -159,12 +223,12 @@ jobs:
           if (-not $inf2cat) {
               $winget = Get-Command winget.exe -ErrorAction Stop
               & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
-              if ($LASTEXITCODE -ne 0) { throw "WDK WinGet installation failed with exit code $LASTEXITCODE." }
+              if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." }
           }
 
       - name: Build analyse and validate WDK package
-        timeout-minutes: 30
         shell: powershell
+        timeout-minutes: 30
         run: .\windows\Build-And-Validate.ps1 -Configuration Release -Platform '${{ matrix.platform }}'
 
       - name: Report WDK failure
@@ -172,34 +236,14 @@ jobs:
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue comment '${{ github.event.issue.number }}' --repo '${{ github.repository }}' --body "WDK qualification failed for ${{ matrix.platform }} on source commit ${{ needs.portable.outputs.source_sha }}. The temporary hardening machinery has been retained for diagnosis."
+        run: gh issue comment '${{ github.event.issue.number }}' --repo '${{ github.repository }}' --body "WDK FAIL: ${{ matrix.platform }} for detached candidate ${{ needs.portable.outputs.source_sha }}. main was not moved."
 
-  cleanup:
+  report:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening' && success()
     needs: [portable, wdk]
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          fetch-depth: 0
-
-      - name: Remove one-shot hardening machinery
-        id: cleanup
-        run: |
-          git fetch origin main
-          test "$(git rev-parse origin/main)" = "${{ needs.portable.outputs.source_sha }}" || { echo 'main moved after qualification; refusing cleanup push'; exit 1; }
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f tools/apply-pre-ms-hardening.py .github/workflows/pre-ms-hardening.yml .github/workflows/run-pre-ms-hardening.yml
-          git commit -m 'Remove pre-MS one-shot hardening machinery'
-          git push origin HEAD:main
-          echo "cleanup_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
-
-      - name: Report complete qualification
+      - name: Report exact candidate ready for main
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "PASS: lifecycle/name hardening qualified on portable real images and WDK x64 + ARM64. Source commit: ${{ needs.portable.outputs.source_sha }}. Cleanup commit: ${{ steps.cleanup.outputs.cleanup_sha }}. Temporary hardening workflows/scripts are removed from main."
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "PASS: portable real-image/cross-build and WDK x64 + ARM64 all qualified the exact hardening patch. Detached candidate ready to fast-forward main: ${{ needs.portable.outputs.source_sha }}. Parent/base: ${{ needs.portable.outputs.base_sha }}. Patch SHA-256: ${{ needs.portable.outputs.patch_sha256 }}. The candidate already removes all temporary hardening workflows/scripts."
