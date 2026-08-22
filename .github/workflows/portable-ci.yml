@@ -8,18 +8,9 @@ on:
   pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  cleanup-pre-ms-temp-branch:
-    if: github.event_name == 'pull_request' && github.event.action == 'opened' && github.event.pull_request.head.ref == 'pre-ms-qualification-temp'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Delete temporary qualification branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: gh api --method DELETE "repos/${{ github.repository }}/git/refs/heads/pre-ms-qualification-temp"
-
   portable:
     runs-on: ubuntu-latest
     steps:
