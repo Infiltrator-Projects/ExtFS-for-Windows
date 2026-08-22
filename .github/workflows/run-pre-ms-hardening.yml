@@ -1,0 +1,73 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Execute pre-MS filesystem hardening
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.event.head_commit.message == 'Execute pre-MS hardening'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Apply audited source transformation
+        run: python3 tools/apply-pre-ms-hardening.py
+
+      - name: Update permanent qualification and exact support documentation
+        shell: python
+        run: |
+          from pathlib import Path
+
+          p = Path('.github/workflows/windows-wdk-ci.yml')
+          text = p.read_text()
+          needle = '      - name: Locate NuGet\n'
+          check = "      - name: Verify filesystem contracts\n        shell: powershell\n        run: .\\windows\\test\\Test-FilesystemContracts.ps1\n\n"
+          if check not in text:
+              if needle not in text:
+                  raise SystemExit('Windows WDK CI insertion point missing')
+              text = text.replace(needle, check + needle, 1)
+              p.write_text(text)
+
+          p = Path('docs/FEATURE_SUPPORT.md')
+          text = p.read_text()
+          old = '| Volume lock/unlock | Refused | Exclusive lock ownership/enforcement not implemented |'
+          new = '| Volume lock/unlock | Implemented | Direct volume handle only; lock succeeds only when no ordinary opens or mapped-section FCBs remain; ownership follows the issuing FILE_OBJECT and releases on unlock/cleanup |'
+          if old in text:
+              text = text.replace(old, new, 1)
+          if 'Locked-volume dismount' not in text:
+              text += '\n| Locked-volume dismount | Implemented bounded path | `FSCTL_DISMOUNT_VOLUME` requires the issuing handle to own an ExtFS volume lock; unlocked forced-dismount teardown remains deferred |\n'
+          if 'Unrepresentable raw ext names' not in text:
+              text += '| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration now surfaces a name-conversion error rather than silently hiding a live entry |\n'
+          p.write_text(text)
+
+      - name: Portable unit and real-image qualification
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          make clean
+          make
+          ./build/test-extfs
+          make integration
+          pwsh -NoLogo -NoProfile -File windows/test/Test-FilesystemContracts.ps1
+          ./windows/build-cross-linux.sh
+          git diff --check
+
+      - name: Commit verified hardening to main and remove one-shot machinery
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" || { echo 'main moved; refusing stale push'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f tools/apply-pre-ms-hardening.py .github/workflows/pre-ms-hardening.yml .github/workflows/run-pre-ms-hardening.yml
+          git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c windows/test/Test-FilesystemContracts.ps1 docs/FEATURE_SUPPORT.md .github/workflows/windows-wdk-ci.yml
+          git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
+          git push origin HEAD:main
