@@ -1,20 +1,27 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Retriggered after the workflow existed on main so GitHub evaluates this push.
-name: Execute pre-MS filesystem hardening
+name: Pre-MS ExtFS qualification gate
 
 on:
-  push:
-    branches: [main]
+  issues:
+    types: [opened]
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
-  harden:
-    if: github.event.head_commit.message == 'Execute pre-MS hardening'
+  portable:
+    if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
+    outputs:
+      source_sha: ${{ steps.publish.outputs.source_sha }}
     steps:
+      - name: Announce start
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS hardening started on main at $GITHUB_SHA. Applying the audited lifecycle/name fixes, then running portable and real-image qualification."
+
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -47,13 +54,13 @@ jobs:
           if 'Locked-volume dismount' not in text:
               text += '\n| Locked-volume dismount | Implemented bounded path | `FSCTL_DISMOUNT_VOLUME` requires the issuing handle to own an ExtFS volume lock; unlocked forced-dismount teardown remains deferred |\n'
           if 'Unrepresentable raw ext names' not in text:
-              text += '| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration now surfaces a name-conversion error rather than silently hiding a live entry |\n'
+              text += '| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration surfaces a name-conversion error rather than silently hiding a live entry |\n'
           p.write_text(text)
 
       - name: Portable unit and real-image qualification
         run: |
           sudo apt-get update
-          sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
+          sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 powershell
           make clean
           make
           ./build/test-extfs
@@ -62,13 +69,108 @@ jobs:
           ./windows/build-cross-linux.sh
           git diff --check
 
-      - name: Commit verified hardening to main and remove one-shot machinery
+      - name: Publish qualified source change to main
+        id: publish
         run: |
           git fetch origin main
           test "$(git rev-parse origin/main)" = "$GITHUB_SHA" || { echo 'main moved; refusing stale push'; exit 1; }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git rm -f tools/apply-pre-ms-hardening.py .github/workflows/pre-ms-hardening.yml .github/workflows/run-pre-ms-hardening.yml
           git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c windows/test/Test-FilesystemContracts.ps1 docs/FEATURE_SUPPORT.md .github/workflows/windows-wdk-ci.yml
           git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
           git push origin HEAD:main
+          echo "source_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report portable success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Portable, real-image, contract and cross-build qualification passed. Source hardening commit: ${{ steps.publish.outputs.source_sha }}. Starting WDK x64 + ARM64 qualification."
+
+      - name: Report portable failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS hardening stopped before publication: the source transformation or portable qualification failed. No hardening source commit was pushed by this run."
+
+  wdk:
+    if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
+    needs: portable
+    runs-on: windows-latest
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [x64, ARM64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.portable.outputs.source_sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify filesystem and installer contracts
+        shell: powershell
+        run: |
+          .\windows\test\Test-FilesystemContracts.ps1
+          .\windows\test\Test-InstallerContract.ps1
+
+      - name: Locate NuGet
+        timeout-minutes: 5
+        shell: powershell
+        run: |
+          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
+          if (-not $nuget) {
+              choco install nuget.commandline -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Ensure full WDK validation tools
+        timeout-minutes: 15
+        shell: powershell
+        run: |
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $inf2cat) {
+              $winget = Get-Command winget.exe -ErrorAction Stop
+              & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) { throw "WDK WinGet installation failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Build analyse and validate WDK package
+        timeout-minutes: 30
+        shell: powershell
+        run: .\windows\Build-And-Validate.ps1 -Configuration Release -Platform '${{ matrix.platform }}'
+
+      - name: Report WDK failure
+        if: failure()
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment '${{ github.event.issue.number }}' --repo '${{ github.repository }}' --body "WDK qualification failed for ${{ matrix.platform }} on source commit ${{ needs.portable.outputs.source_sha }}. The temporary hardening machinery has been retained for diagnosis."
+
+  cleanup:
+    if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening' && success()
+    needs: [portable, wdk]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Remove one-shot hardening machinery
+        id: cleanup
+        run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "${{ needs.portable.outputs.source_sha }}" || { echo 'main moved after qualification; refusing cleanup push'; exit 1; }
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git rm -f tools/apply-pre-ms-hardening.py .github/workflows/pre-ms-hardening.yml .github/workflows/run-pre-ms-hardening.yml
+          git commit -m 'Remove pre-MS one-shot hardening machinery'
+          git push origin HEAD:main
+          echo "cleanup_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Report complete qualification
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "PASS: lifecycle/name hardening qualified on portable real images and WDK x64 + ARM64. Source commit: ${{ needs.portable.outputs.source_sha }}. Cleanup commit: ${{ steps.cleanup.outputs.cleanup_sha }}. Temporary hardening workflows/scripts are removed from main."
