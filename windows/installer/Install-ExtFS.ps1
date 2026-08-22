@@ -6,7 +6,7 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$packageVersion = '0.9.4'
+$packageVersion = '0.9.5'
 $serviceName = 'ExtFS'
 $installRoot = Join-Path $env:ProgramFiles 'ExtFS'
 $driverSource = Join-Path $PSScriptRoot 'extfs.sys'
@@ -38,6 +38,33 @@ function Test-PendingRestart {
     $componentServicing = Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending'
     $windowsUpdate = Test-Path -LiteralPath 'HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired'
     return [bool]($fileRename -or $componentServicing -or $windowsUpdate)
+}
+
+function Get-NativeWindowsArchitecture {
+    # PROCESSOR_ARCHITECTURE is a process-scoped variable. Asking .NET for the
+    # machine-scoped environment value can return null and caused 0.9.4 to reject
+    # genuine x64 Windows systems. RuntimeInformation reports the operating-system
+    # architecture independently of whether Setup itself is a 32-bit process.
+    try {
+        $runtimeArchitecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToUpperInvariant()
+        switch ($runtimeArchitecture) {
+            'X64'   { return 'AMD64' }
+            'ARM64' { return 'ARM64' }
+            'X86'   { return 'x86' }
+        }
+    } catch {
+        # Windows PowerShell on supported Windows 11 builds normally exposes
+        # RuntimeInformation. Keep a WOW64-safe fallback for older hosts.
+    }
+
+    $nativeArchitecture = $env:PROCESSOR_ARCHITEW6432
+    if ([string]::IsNullOrWhiteSpace($nativeArchitecture)) {
+        $nativeArchitecture = $env:PROCESSOR_ARCHITECTURE
+    }
+    if ([string]::IsNullOrWhiteSpace($nativeArchitecture)) {
+        throw 'Windows native architecture could not be determined.'
+    }
+    return $nativeArchitecture.ToUpperInvariant()
 }
 
 function Get-PortableExecutableMachine {
@@ -107,7 +134,7 @@ function Get-RecentDriverDiagnostics {
 
 Assert-Administrator
 
-$machineArchitecture = [Environment]::GetEnvironmentVariable('PROCESSOR_ARCHITECTURE', 'Machine')
+$machineArchitecture = Get-NativeWindowsArchitecture
 $expectedMachineArchitecture = if ($TargetArchitecture -eq 'ARM64') { 'ARM64' } else { 'AMD64' }
 if ($machineArchitecture -ne $expectedMachineArchitecture) {
     throw "This package targets $TargetArchitecture but Windows reports native architecture $machineArchitecture."
