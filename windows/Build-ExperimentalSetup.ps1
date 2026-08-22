@@ -16,6 +16,7 @@ $inf = Join-Path $release 'extfs.inf'
 $catalog = Join-Path $release 'extfs.cat'
 $certificateFile = Join-Path $release 'extfs-test.cer'
 $buildScript = Join-Path $PSScriptRoot 'Build-And-Validate.ps1'
+$packageVersion = '0.9.4'
 
 function Find-WindowsKitTool {
     param([Parameter(Mandatory)][string]$Name)
@@ -133,7 +134,7 @@ if ($KeepExistingTestCertificate -and (Test-Path -LiteralPath $certificateFile))
 }
 if (-not $cert) {
     $cert = New-SelfSignedCertificate -Type CodeSigningCert `
-        -Subject 'CN=ExtFS 0.9.3 Experimental Test Signing' `
+        -Subject "CN=ExtFS $packageVersion Experimental Test Signing" `
         -CertStoreLocation 'Cert:\CurrentUser\My' `
         -KeyExportPolicy Exportable -KeyLength 3072 -HashAlgorithm SHA256 `
         -NotAfter (Get-Date).AddYears(2)
@@ -180,7 +181,7 @@ Invoke-BoundedSignatureInspection -Tool $signtool -File $inf `
     -Catalog $catalog -ExpectedThumbprint $cert.Thumbprint
 
 $architectureSlug = if ($Platform -eq 'ARM64') { 'arm64' } else { 'x64' }
-$setupName = "ExtFS-for-Windows-0.9.3-experimental-$architectureSlug-setup.exe"
+$setupName = "ExtFS-for-Windows-$packageVersion-experimental-$architectureSlug-setup.exe"
 $installerScript = Join-Path $PSScriptRoot 'installer\extfs-installer.nsi'
 Push-Location (Split-Path -Parent $installerScript)
 try {
@@ -198,6 +199,7 @@ $catHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $catalog).Hash
 $reportPath = Join-Path $release 'build-report.txt'
 if (Test-Path -LiteralPath $reportPath) {
     Add-Content -LiteralPath $reportPath -Encoding UTF8 -Value @(
+        "PackageVersion: $packageVersion"
         "FinalSignedDriverSHA256: $hash"
         "FinalSignedCatalogSHA256: $catHash"
         "CatalogMembershipVerified: True"
@@ -205,7 +207,7 @@ if (Test-Path -LiteralPath $reportPath) {
     )
 }
 Write-Host ''
-Write-Host 'Experimental package completed.'
+Write-Host "Experimental package $packageVersion completed."
 Write-Host "Signed driver SHA-256: $hash"
 Write-Host "Signed catalog SHA-256: $catHash"
 Write-Host "Setup: $(Join-Path $root $setupName)"
