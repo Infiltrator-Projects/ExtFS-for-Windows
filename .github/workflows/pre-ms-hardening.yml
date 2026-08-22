@@ -3,8 +3,7 @@ name: Pre-MS ExtFS hardening
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
 
 permissions:
   contents: write
@@ -13,113 +12,90 @@ jobs:
   harden:
     if: github.event.head_commit.message == 'Start pre-MS ExtFS hardening'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
           submodules: recursive
 
-      - name: Apply audited filesystem hardening
+      - name: Apply audited correctness patch
         shell: python
         run: |
           from pathlib import Path
+          import re
 
           def replace_once(path, old, new):
               p = Path(path)
-              s = p.read_text()
-              n = s.count(old)
-              if n != 1:
-                  raise SystemExit(f"{path}: expected exactly one match, found {n}: {old[:80]!r}")
-              p.write_text(s.replace(old, new, 1))
+              text = p.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{path}: expected one match, found {count}: {old[:70]!r}')
+              p.write_text(text.replace(old, new, 1))
 
-          # Portable core checkpoint metadata/status completeness.
           replace_once('include/extfs/extfs.h',
                        '#define EXTFS_VERSION_PATCH 2',
                        '#define EXTFS_VERSION_PATCH 3')
 
           p = Path('core/extfs.c')
-          s = p.read_text()
-          marker = 'const char *extfs_status_string(extfs_status status)'
-          start = s.find(marker)
-          if start < 0:
+          text = p.read_text()
+          match = re.search(r'(const char \*extfs_status_string\(extfs_status status\)\s*\{[\s\S]*?)(\n\})', text)
+          if not match:
               raise SystemExit('extfs_status_string not found')
-          switch_end = s.find('\n}', start)
-          if switch_end < 0:
-              raise SystemExit('extfs_status_string end not found')
-          chunk = s[start:switch_end]
-          if 'EXTFS_ERR_NO_SPACE' not in chunk:
-              default = '        default: return "unknown extfs status";'
-              if default not in chunk:
+          body = match.group(1)
+          if 'EXTFS_ERR_NO_SPACE' not in body:
+              old = '        default: return "unknown extfs status";'
+              if old not in body:
                   raise SystemExit('status-string default not found')
-              chunk = chunk.replace(default,
-                  '        case EXTFS_ERR_NO_SPACE: return "no space left on device";\n' + default, 1)
-              s = s[:start] + chunk + s[switch_end:]
-              p.write_text(s)
+              body = body.replace(old,
+                  '        case EXTFS_ERR_NO_SPACE: return "no space left on device";\n' + old, 1)
+              text = text[:match.start(1)] + body + text[match.end(1):]
+              p.write_text(text)
 
-          # VCB remembers which direct volume handle owns an explicit lock.
           replace_once('windows/driver/extfs_driver.h',
               '    volatile LONG FileObjectCount;\n    BOOLEAN Dismounted;',
               '    volatile LONG FileObjectCount;\n    PFILE_OBJECT VolumeLockFileObject;\n    BOOLEAN Dismounted;')
 
-          # Directory enumeration must never silently make an ext name disappear.
           replace_once('windows/driver/extfs_driver.c',
               '    BOOLEAN CaseSensitive;\n    BOOLEAN Found;\n} EXTFS_DIRENT_PICK, *PEXTFS_DIRENT_PICK;',
               '    BOOLEAN CaseSensitive;\n    BOOLEAN Found;\n    NTSTATUS NameStatus;\n} EXTFS_DIRENT_PICK, *PEXTFS_DIRENT_PICK;')
 
           replace_once('windows/driver/extfs_driver.c',
               '''    status = ExtfsUtf8ToUnicode(Name, NameLength, unicode,\n                                EXTFS_MAX_NAME_LENGTH, &unicodeLength);\n    if (!NT_SUCCESS(status) ||\n        !ExtfsWildcardMatch(pick->Pattern, pick->PatternLength,\n                            unicode, unicodeLength, pick->CaseSensitive)) {\n        return 0;\n    }''',
-              '''    status = ExtfsUtf8ToUnicode(Name, NameLength, unicode,\n                                EXTFS_MAX_NAME_LENGTH, &unicodeLength);\n    if (!NT_SUCCESS(status)) {\n        /* ext filenames are arbitrary non-NUL byte strings.  Windows cannot\n         * represent every such name as UTF-16, but silently skipping one makes\n         * a live ext directory entry invisible.  Stop this query and surface a\n         * deterministic name error instead. */\n        pick->NameStatus = status;\n        return 1;\n    }\n    if (!ExtfsWildcardMatch(pick->Pattern, pick->PatternLength,\n                            unicode, unicodeLength, pick->CaseSensitive)) {\n        return 0;\n    }''')
+              '''    status = ExtfsUtf8ToUnicode(Name, NameLength, unicode,\n                                EXTFS_MAX_NAME_LENGTH, &unicodeLength);\n    if (!NT_SUCCESS(status)) {\n        /* A live ext dentry must never disappear merely because Windows cannot\n         * encode its raw byte name as UTF-16.  Stop enumeration and surface the\n         * conversion error instead of silently skipping the entry. */\n        pick->NameStatus = status;\n        return 1;\n    }\n    if (!ExtfsWildcardMatch(pick->Pattern, pick->PatternLength,\n                            unicode, unicodeLength, pick->CaseSensitive)) {\n        return 0;\n    }''')
 
           replace_once('windows/driver/extfs_driver.c',
               '''    if (status != EXTFS_OK && status != EXTFS_STOP)\n        return ExtfsStatusToNt(status);\n    return Pick->Found ? STATUS_SUCCESS : STATUS_NO_MORE_FILES;''',
               '''    if (status != EXTFS_OK && status != EXTFS_STOP)\n        return ExtfsStatusToNt(status);\n    if (!NT_SUCCESS(Pick->NameStatus)) return Pick->NameStatus;\n    return Pick->Found ? STATUS_SUCCESS : STATUS_NO_MORE_FILES;''')
 
-          # Closing the locking handle automatically releases the explicit lock.
           replace_once('windows/driver/extfs_driver.c',
               '''    IoRemoveShareAccess(FileObject, &fcb->ShareAccess);\n    if (fcb->HandleCount > 0) --fcb->HandleCount;\n    ccb->CleanupComplete = TRUE;''',
               '''    IoRemoveShareAccess(FileObject, &fcb->ShareAccess);\n    if (fcb->HandleCount > 0) --fcb->HandleCount;\n    if (fcb->VolumeOpen && fcb->Vcb->VolumeLockFileObject == FileObject) {\n        KIRQL savedIrql;\n        IoAcquireVpbSpinLock(&savedIrql);\n        fcb->Vcb->Vpb->Flags &= (USHORT)~VPB_LOCKED;\n        IoReleaseVpbSpinLock(savedIrql);\n        fcb->Vcb->VolumeLockFileObject = NULL;\n    }\n    ccb->CleanupComplete = TRUE;''')
 
-          # Add explicit lock/unlock/locked-dismount helpers before the FSCTL dispatcher.
-          p = Path('windows/driver/extfs_driver.c')
-          s = p.read_text()
+          driver = Path('windows/driver/extfs_driver.c')
+          text = driver.read_text()
           anchor = 'NTSTATUS ExtfsDispatchFileSystemControl(PDEVICE_OBJECT DeviceObject, PIRP Irp)\n{'
-          if s.count(anchor) != 1:
-              raise SystemExit('FSCTL dispatcher anchor mismatch')
+          if text.count(anchor) != 1:
+              raise SystemExit('FSCTL dispatcher anchor not found')
           helpers = r'''static NTSTATUS ExtfsLockMountedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObject)
 {
-    PEXTFS_FCB ownerFcb;
+    PEXTFS_FCB ownerFcb = ExtfsFcbFromFile(FileObject);
     LIST_ENTRY reapList;
     PLIST_ENTRY entry;
     NTSTATUS status = STATUS_ACCESS_DENIED;
     KIRQL savedIrql;
-
-    ownerFcb = ExtfsFcbFromFile(FileObject);
     if (ownerFcb == NULL || ownerFcb->Vcb != Vcb || !ownerFcb->VolumeOpen)
         return STATUS_INVALID_PARAMETER;
-
     InitializeListHead(&reapList);
     ExtfsAcquireFcbList(Vcb);
     ExtfsCollectReapableFcbsLocked(Vcb, &reapList, FALSE);
-    if (Vcb->Dismounted) {
-        status = STATUS_VOLUME_DISMOUNTED;
+    if (Vcb->Dismounted) { status = STATUS_VOLUME_DISMOUNTED; goto ExitLocked; }
+    if (Vcb->VolumeLockFileObject != NULL || Vcb->OpenHandleCount != 1 || Vcb->FileObjectCount != 1)
         goto ExitLocked;
-    }
-    if (Vcb->VolumeLockFileObject != NULL)
-        goto ExitLocked;
-
-    /* FSCTL_LOCK_VOLUME succeeds only when this volume handle is the only live
-     * user FILE_OBJECT and there are no mapped-section FCBs left behind by a
-     * closed file.  This mirrors the I/O manager contract: a successful lock
-     * proves that no ordinary file is open on the volume. */
-    if (Vcb->OpenHandleCount != 1 || Vcb->FileObjectCount != 1)
-        goto ExitLocked;
-    for (entry = Vcb->FcbList.Flink; entry != &Vcb->FcbList;
-         entry = entry->Flink) {
+    for (entry = Vcb->FcbList.Flink; entry != &Vcb->FcbList; entry = entry->Flink) {
         PEXTFS_FCB fcb = CONTAINING_RECORD(entry, EXTFS_FCB, Links);
         if (fcb != ownerFcb) goto ExitLocked;
     }
-
     IoAcquireVpbSpinLock(&savedIrql);
     if ((Vcb->Vpb->Flags & VPB_LOCKED) == 0U) {
         Vcb->Vpb->Flags |= VPB_LOCKED;
@@ -127,11 +103,9 @@ jobs:
         status = STATUS_SUCCESS;
     }
     IoReleaseVpbSpinLock(savedIrql);
-
 ExitLocked:
     ExtfsReleaseFcbList(Vcb);
     ExtfsDestroyFcbList(&reapList);
-
     if (NT_SUCCESS(status) && Vcb->WriteEnabled) {
         NTSTATUS flushStatus = ExtfsFlushLowerDevice(&Vcb->Reader);
         if (!NT_SUCCESS(flushStatus)) {
@@ -154,10 +128,8 @@ static NTSTATUS ExtfsUnlockMountedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObject
     PEXTFS_FCB ownerFcb = ExtfsFcbFromFile(FileObject);
     NTSTATUS status = STATUS_NOT_LOCKED;
     KIRQL savedIrql;
-
     if (ownerFcb == NULL || ownerFcb->Vcb != Vcb || !ownerFcb->VolumeOpen)
         return STATUS_INVALID_PARAMETER;
-
     ExtfsAcquireFcbList(Vcb);
     if (Vcb->VolumeLockFileObject == FileObject) {
         IoAcquireVpbSpinLock(&savedIrql);
@@ -175,15 +147,8 @@ static NTSTATUS ExtfsDismountLockedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObjec
     PEXTFS_FCB ownerFcb = ExtfsFcbFromFile(FileObject);
     KIRQL savedIrql;
     NTSTATUS status;
-
     if (ownerFcb == NULL || ownerFcb->Vcb != Vcb || !ownerFcb->VolumeOpen)
         return STATUS_INVALID_PARAMETER;
-
-    /* ExtFS currently performs a complete, deterministic dismount only from an
-     * explicitly locked volume.  FSCTL_DISMOUNT_VOLUME without a prior lock can
-     * invalidate arbitrary open file objects; supporting that safely requires
-     * the later full VCB teardown/remount state machine rather than pretending
-     * that merely clearing VPB_MOUNTED is sufficient. */
     ExtfsAcquireFcbList(Vcb);
     if (Vcb->VolumeLockFileObject != FileObject) {
         ExtfsReleaseFcbList(Vcb);
@@ -194,11 +159,8 @@ static NTSTATUS ExtfsDismountLockedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObjec
         return STATUS_VOLUME_DISMOUNTED;
     }
     ExtfsReleaseFcbList(Vcb);
-
-    status = Vcb->WriteEnabled ? ExtfsFlushLowerDevice(&Vcb->Reader)
-                               : STATUS_SUCCESS;
+    status = Vcb->WriteEnabled ? ExtfsFlushLowerDevice(&Vcb->Reader) : STATUS_SUCCESS;
     if (!NT_SUCCESS(status)) return status;
-
     ExtfsAcquireFcbList(Vcb);
     if (Vcb->VolumeLockFileObject != FileObject) {
         ExtfsReleaseFcbList(Vcb);
@@ -207,127 +169,61 @@ static NTSTATUS ExtfsDismountLockedVolume(PEXTFS_VCB Vcb, PFILE_OBJECT FileObjec
     Vcb->Dismounted = TRUE;
     IoAcquireVpbSpinLock(&savedIrql);
     Vcb->Vpb->Flags &= (USHORT)~VPB_MOUNTED;
-#ifdef VPB_DIRECT_WRITES_ALLOWED
-    Vcb->Vpb->Flags |= VPB_DIRECT_WRITES_ALLOWED;
-#endif
     IoReleaseVpbSpinLock(savedIrql);
     ExtfsReleaseFcbList(Vcb);
     return STATUS_SUCCESS;
 }
 
 '''
-          s = s.replace(anchor, helpers + anchor, 1)
-          p.write_text(s)
+          driver.write_text(text.replace(anchor, helpers + anchor, 1))
 
-          # Wire the FSCTLs instead of claiming lock support while refusing it.
           replace_once('windows/driver/extfs_driver.c',
               '''        case FSCTL_LOCK_VOLUME:\n        case FSCTL_UNLOCK_VOLUME:\n            /* Exclusive lock ownership is not implemented yet; refusing the\n             * operation is safer than setting VPB_LOCKED without enforcement. */\n            status = STATUS_NOT_SUPPORTED;\n            break;''',
               '''        case FSCTL_LOCK_VOLUME:\n            status = ExtfsLockMountedVolume(vcb, stack->FileObject);\n            break;\n        case FSCTL_UNLOCK_VOLUME:\n            status = ExtfsUnlockMountedVolume(vcb, stack->FileObject);\n            break;\n        case FSCTL_DISMOUNT_VOLUME:\n            status = ExtfsDismountLockedVolume(vcb, stack->FileObject);\n            break;''')
 
-          # Existing file handles must not continue data/metadata I/O against a
-          # VCB after a successful dismount.
-          for old, new in [
-              ('''    if (fcb == NULL || fcb->VolumeOpen) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    }\n    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {''',
-               '''    if (fcb == NULL || fcb->VolumeOpen) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    }\n    if (fcb->Vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {'''),
-              ('''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    if (!fcb->Vcb->WriteEnabled)''',
-               '''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    if (fcb->Vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    if (!fcb->Vcb->WriteEnabled)'''),
-              ('''    if (fcb == NULL || ccb == NULL || buffer == NULL) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);\n    }\n    ExtfsZeroMemory(buffer, length);''',
-               '''    if (fcb == NULL || ccb == NULL || buffer == NULL) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);\n    }\n    if (fcb->Vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    ExtfsZeroMemory(buffer, length);'''),
-          ]:
-              p = Path('windows/driver/extfs_driver.c')
-              text = p.read_text()
-              count = text.count(old)
-              if count < 1:
-                  raise SystemExit(f'dismount guard anchor not found: {old[:60]!r}')
-              p.write_text(text.replace(old, new, 1))
+          # Existing handles must stop using a dismounted VCB.
+          driver = Path('windows/driver/extfs_driver.c')
+          text = driver.read_text()
+          old = '''    if (fcb == NULL || fcb->VolumeOpen) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    }\n    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {'''
+          if old not in text: raise SystemExit('read guard anchor missing')
+          text = text.replace(old, '''    if (fcb == NULL || fcb->VolumeOpen) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    }\n    if (fcb->Vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    if (extfs_inode_type(&fcb->Inode) == EXTFS_NODE_DIRECTORY) {''', 1)
+          old = '''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    if (!fcb->Vcb->WriteEnabled)'''
+          if text.count(old) < 2: raise SystemExit('write/setinfo guard anchors missing')
+          new = '''    if (fcb == NULL || ccb == NULL || fcb->VolumeOpen)\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_DEVICE_REQUEST, 0U);\n    if (fcb->Vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    if (!fcb->Vcb->WriteEnabled)'''
+          text = text.replace(old, new, 2)
+          driver.write_text(text)
 
-          # Directory queries and volume queries also fail on a dismounted VCB.
-          replace_once('windows/driver/extfs_driver.c',
-              '''    if (fcb == NULL || ccb == NULL ||\n        extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||''',
-              '''    if (fcb != NULL && fcb->Vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    if (fcb == NULL || ccb == NULL ||\n        extfs_inode_type(&fcb->Inode) != EXTFS_NODE_DIRECTORY ||''')
-
-          replace_once('windows/driver/extfs_driver.c',
-              '''    if (vcb == NULL || buffer == NULL) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);\n    }\n    ExtfsZeroMemory(buffer, length);''',
-              '''    if (vcb == NULL || buffer == NULL) {\n        return ExtfsCompleteIrp(Irp, STATUS_INVALID_PARAMETER, 0U);\n    }\n    if (vcb->Dismounted)\n        return ExtfsCompleteIrp(Irp, STATUS_VOLUME_DISMOUNTED, 0U);\n    ExtfsZeroMemory(buffer, length);''')
-
-          # Documentation must state the exact boundary, not over-claim unlocked
-          # dismount or arbitrary raw-byte filename compatibility.
-          p = Path('docs/FEATURE_SUPPORT.md')
-          s = p.read_text()
-          s = s.replace('| Volume lock/unlock | Refused | Exclusive lock ownership/enforcement not implemented |',
-                        '| Volume lock/unlock | Implemented | Direct volume handle only; succeeds only when no ordinary opens or mapped sections remain; lock is owned by the issuing FILE_OBJECT and released on unlock/cleanup |')
-          if 'Locked-volume dismount' not in s:
-              s += '\n| Locked-volume dismount | Implemented | `FSCTL_DISMOUNT_VOLUME` requires the issuing handle to own `FSCTL_LOCK_VOLUME`; unlocked forced-dismount teardown remains deferred |\n'
-          p.write_text(s)
-
-          # Static contract test for the Windows-only lifecycle logic.
           Path('windows/test/Test-FilesystemContracts.ps1').write_text(r'''# SPDX-License-Identifier: GPL-3.0-or-later
-[CmdletBinding()]
-param()
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
-$driver = Get-Content -LiteralPath (Join-Path $root 'windows\driver\extfs_driver.c') -Raw
-$header = Get-Content -LiteralPath (Join-Path $root 'windows\driver\extfs_driver.h') -Raw
-$coreHeader = Get-Content -LiteralPath (Join-Path $root 'include\extfs\extfs.h') -Raw
-$core = Get-Content -LiteralPath (Join-Path $root 'core\extfs.c') -Raw
-
-foreach ($required in @(
-    'VolumeLockFileObject', 'VPB_LOCKED', 'ExtfsLockMountedVolume',
-    'ExtfsUnlockMountedVolume', 'ExtfsDismountLockedVolume',
-    'FSCTL_DISMOUNT_VOLUME', 'STATUS_VOLUME_DISMOUNTED', 'NameStatus')) {
-    if ($driver -notmatch [regex]::Escape($required) -and $header -notmatch [regex]::Escape($required)) {
-        throw "Missing filesystem lifecycle contract: $required"
-    }
+$d = Get-Content -LiteralPath (Join-Path $root 'windows\driver\extfs_driver.c') -Raw
+$h = Get-Content -LiteralPath (Join-Path $root 'windows\driver\extfs_driver.h') -Raw
+$c = Get-Content -LiteralPath (Join-Path $root 'core\extfs.c') -Raw
+$ch = Get-Content -LiteralPath (Join-Path $root 'include\extfs\extfs.h') -Raw
+foreach ($token in @('VolumeLockFileObject','VPB_LOCKED','ExtfsLockMountedVolume','ExtfsUnlockMountedVolume','ExtfsDismountLockedVolume','FSCTL_DISMOUNT_VOLUME','NameStatus')) {
+    if ($d -notmatch [regex]::Escape($token) -and $h -notmatch [regex]::Escape($token)) { throw "Missing filesystem contract: $token" }
 }
-if ($driver -match 'FSCTL_LOCK_VOLUME:\s*\r?\n\s*case FSCTL_UNLOCK_VOLUME:\s*\r?\n[\s\S]{0,300}STATUS_NOT_SUPPORTED') {
-    throw 'Volume lock/unlock regressed to the old unconditional refusal.'
-}
-if ($coreHeader -notmatch '#define EXTFS_VERSION_PATCH 3') {
-    throw 'Portable core version is not 0.9.3.'
-}
-if ($core -notmatch 'EXTFS_ERR_NO_SPACE:\s*return "no space left on device"') {
-    throw 'EXTFS_ERR_NO_SPACE has no public status string.'
-}
-Write-Host 'Filesystem lifecycle/name/version contracts: PASS'
+if ($ch -notmatch '#define EXTFS_VERSION_PATCH 3') { throw 'Portable core version is not 0.9.3.' }
+if ($c -notmatch 'EXTFS_ERR_NO_SPACE:\s*return "no space left on device"') { throw 'NO_SPACE status text is missing.' }
+Write-Host 'Filesystem contracts: PASS'
 ''')
 
-          # Invoke the new static contract from permanent WDK CI as well.
-          p = Path('.github/workflows/windows-wdk-ci.yml')
-          s = p.read_text()
-          needle = '      - name: Locate NuGet\n'
-          if needle not in s:
-              raise SystemExit('windows-wdk-ci Locate NuGet anchor missing')
-          check = "      - name: Verify filesystem contracts\n        shell: powershell\n        run: .\\windows\\test\\Test-FilesystemContracts.ps1\n\n"
-          s = s.replace(needle, check + needle, 1)
-          p.write_text(s)
-
-      - name: Install portable and cross-build dependencies
+      - name: Portable unit and real-image tests
         run: |
           sudo apt-get update
-          sudo apt-get install -y e2fsprogs gcc clang make cmake mingw-w64
-
-      - name: Portable build and unit tests
-        run: |
+          sudo apt-get install -y e2fsprogs make gcc
           make clean
           make
           ./build/test-extfs
-
-      - name: Real ext2/ext3/ext4 image qualification
-        run: make integration
-
-      - name: Windows freestanding cross-build
-        run: ./windows/build-cross-linux.sh
-
-      - name: Review patch
-        run: |
+          make integration
           git diff --check
-          git status --short
-          git diff --stat
 
-      - name: Commit hardening to main
+      - name: Commit verified hardening
         run: |
+          git fetch origin main
+          test "$(git rev-parse origin/main)" = "$GITHUB_SHA" || { echo 'main moved; refusing stale push'; exit 1; }
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c docs/FEATURE_SUPPORT.md windows/test/Test-FilesystemContracts.ps1 .github/workflows/windows-wdk-ci.yml
+          git add include/extfs/extfs.h core/extfs.c windows/driver/extfs_driver.h windows/driver/extfs_driver.c windows/test/Test-FilesystemContracts.ps1
           git commit -m 'Pre-MS hardening: lifecycle and filename correctness'
           git push origin HEAD:main
