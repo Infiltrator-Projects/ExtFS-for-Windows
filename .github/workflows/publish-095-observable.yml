@@ -1,0 +1,132 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Publish ExtFS 0.9.5 observable
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish:
+    if: github.head_ref == 'release-095-observable'
+    runs-on: windows-latest
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Verify exact release source
+        shell: powershell
+        run: |
+          if ((Get-Content -LiteralPath 'third_party\infiltratr-common\VERSION' -Raw).Trim() -ne '1.9.0') { throw 'Infiltratr Common is not pinned at 1.9.0.' }
+          .\windows\test\Test-InstallerContract.ps1
+          $sourceDriverVer = Get-Content -LiteralPath 'windows\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
+          if (($sourceDriverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Unexpected driver payload version: '$sourceDriverVer'." }
+
+      - name: Locate NuGet
+        shell: powershell
+        run: |
+          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) {
+              choco install nuget.commandline -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Ensure full WDK validation tools
+        timeout-minutes: 15
+        shell: powershell
+        run: |
+          $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $inf2cat) {
+              $winget = Get-Command winget.exe -ErrorAction Stop
+              & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
+              if ($LASTEXITCODE -ne 0) { throw "WDK WinGet installation failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Ensure NSIS
+        shell: powershell
+        run: |
+          if (-not (Get-Command makensis.exe -ErrorAction SilentlyContinue) -and -not (Test-Path -LiteralPath (Join-Path $env:ProgramFiles 'NSIS\makensis.exe')) -and -not (Test-Path -LiteralPath (Join-Path ${env:ProgramFiles(x86)} 'NSIS\makensis.exe'))) {
+              choco install nsis -y --no-progress
+              if ($LASTEXITCODE -ne 0) { throw "Chocolatey NSIS install failed with exit code $LASTEXITCODE." }
+          }
+
+      - name: Build and verify x64 installer
+        timeout-minutes: 25
+        shell: powershell
+        run: |
+          .\windows\Build-ExperimentalSetup.ps1 -Platform x64 -SkipCodeAnalysis
+          $setup = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
+          if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
+          $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
+          if ($version -ne '0.9.5.0') { throw "Installer version mismatch: expected 0.9.5.0, found '$version'." }
+          $report = Get-Content -LiteralPath 'release\driver\build-report.txt' -Raw
+          if ($report -notmatch '(?m)^PackageVersion: 0\.9\.5\r?$') { throw 'Package-version evidence is missing.' }
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
+          "EXTFS_SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Installer SHA-256: $hash"
+
+      - name: Publish and verify v0.9.5
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $setup = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
+          $releaseUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/v0.9.5"
+          $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $releaseExists = $false
+          try {
+              Invoke-RestMethod -Uri $releaseUri -Headers $headers -Method Get | Out-Null
+              $releaseExists = $true
+          } catch {
+              if ($null -eq $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
+          }
+
+          $notes = @"
+          ExtFS for Windows 0.9.5 is an installer-only architecture-detection hotfix carrying the already-qualified ExtFS 0.9.3.0 filesystem driver.
+
+          Fixed:
+          - removes the broken machine-scoped PROCESSOR_ARCHITECTURE check that falsely rejected genuine x64 Windows;
+          - uses RuntimeInformation.OSArchitecture with a WOW64-safe fallback;
+          - independently verifies the bundled driver PE machine before installation;
+          - retains the 0.9.4 service ImagePath and service-contract fixes;
+          - retains Infiltratr Common 1.9.0.
+
+          Installer SHA-256: $env:EXTFS_SETUP_SHA256
+          "@
+          Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
+
+          if (-not $releaseExists) {
+              & gh release create v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --target 36fb8f15d2b38badacc7648971f48095ff894e76 --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
+              if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
+          } else {
+              & gh release upload v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --clobber
+              if ($LASTEXITCODE -ne 0) { throw "GitHub release upload failed with exit code $LASTEXITCODE." }
+          }
+
+          $release = & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or $release.tagName -ne 'v0.9.5' -or $release.name -ne 'ExtFS for Windows 0.9.5' -or $release.isDraft -or $release.isPrerelease) { throw 'Published v0.9.5 metadata is incorrect.' }
+          $assets = @($release.assets | Where-Object name -eq $setup)
+          if ($assets.Count -ne 1) { throw "Expected exactly one installer asset '$setup'." }
+          Write-Host 'Published and verified v0.9.5.'
+
+      - name: Close trigger PR and delete branch
+        if: success()
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          & gh pr close $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --comment 'ExtFS 0.9.5 published and verified; removing one-shot publication branch.'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to close publication PR.' }
+          & gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/release-095-observable" *> $null
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to delete publication branch.' }
