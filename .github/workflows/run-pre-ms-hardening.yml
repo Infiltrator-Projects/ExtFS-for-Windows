@@ -26,19 +26,16 @@ jobs:
         with:
           fetch-depth: 0
           submodules: recursive
-
       - name: Announce start
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Pre-MS qualification started at $GITHUB_SHA. main will not move unless portable, real-image, cross-build and both WDK architectures pass."
-
       - name: Apply audited source transformation
         id: transform
         shell: bash
         run: |
           set -o pipefail
           python3 tools/apply-pre-ms-hardening.py 2>&1 | tee "$RUNNER_TEMP/extfs-transform.log"
-
       - name: Update permanent qualification and support documentation
         id: docs
         shell: python
@@ -52,7 +49,6 @@ jobs:
               if needle not in text:
                   raise SystemExit('Windows WDK CI insertion point missing')
               p.write_text(text.replace(needle, check + needle, 1))
-
           p = Path('docs/FEATURE_SUPPORT.md')
           text = p.read_text()
           old = '| Volume lock/unlock | Refused | Exclusive lock ownership/enforcement not implemented |'
@@ -64,7 +60,6 @@ jobs:
           if 'Unrepresentable raw ext names' not in text:
               text += '| Unrepresentable raw ext names | Explicit failure | ext permits arbitrary non-NUL name bytes; Windows enumeration surfaces a name-conversion error rather than silently hiding a live entry |\n'
           p.write_text(text)
-
       - name: Portable unit real-image contract and cross-build qualification
         id: qualify
         shell: bash
@@ -81,7 +76,6 @@ jobs:
             ./windows/build-cross-linux.sh
             git diff --check
           } 2>&1 | tee "$RUNNER_TEMP/extfs-qualification.log"
-
       - name: Build exact detached candidate and patch
         id: detached
         env:
@@ -100,7 +94,6 @@ jobs:
           token = os.environ['GITHUB_TOKEN']
           base = os.environ['GITHUB_SHA']
           api = f'https://api.github.com/repos/{repo}'
-
           def request(method, path, payload=None):
               data = None if payload is None else json.dumps(payload).encode()
               req = urllib.request.Request(api + path, data=data, method=method)
@@ -109,11 +102,9 @@ jobs:
               req.add_header('X-GitHub-Api-Version', '2022-11-28')
               with urllib.request.urlopen(req) as r:
                   return json.load(r)
-
           base_commit = request('GET', f'/git/commits/{base}')
           entries = []
-          raw = subprocess.check_output(['git','diff','--name-status','-z','HEAD'])
-          fields = raw.decode().split('\0')
+          fields = subprocess.check_output(['git','diff','--name-status','-z','HEAD']).decode().split('\0')
           i = 0
           while i < len(fields) and fields[i]:
               status = fields[i]; i += 1
@@ -127,30 +118,22 @@ jobs:
               blob = request('POST','/git/blobs',{'content':base64.b64encode(content).decode(),'encoding':'base64'})
               entries.append({'path':path,'mode':'100644','type':'blob','sha':blob['sha']})
           tree = request('POST','/git/trees',{'base_tree':base_commit['tree']['sha'],'tree':entries})
-          commit = request('POST','/git/commits',{
-              'message':'Pre-MS hardening: lifecycle and filename correctness',
-              'tree':tree['sha'],
-              'parents':[base]
-          })
-          out = os.environ['GITHUB_OUTPUT']
-          with open(out,'a') as f:
+          commit = request('POST','/git/commits',{'message':'Pre-MS hardening: lifecycle and filename correctness','tree':tree['sha'],'parents':[base]})
+          with open(os.environ['GITHUB_OUTPUT'],'a') as f:
               f.write(f"source_sha={commit['sha']}\n")
               f.write(f"base_sha={base}\n")
               f.write(f"patch_sha256={os.environ['PATCH_SHA256']}\n")
           print('Detached qualified candidate:', commit['sha'])
           PY
-
       - uses: actions/upload-artifact@v4
         with:
           name: extfs-pre-ms-qualified-patch
           path: ${{ runner.temp }}/extfs-qualified/qualified.patch
           if-no-files-found: error
-
       - name: Report portable success
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body "Portable/real-image/contracts/cross-build PASS. Detached candidate: ${{ steps.detached.outputs.source_sha }}. Patch SHA-256: ${{ steps.detached.outputs.patch_sha256 }}. Starting WDK x64 + ARM64 against this exact patch."
-
       - name: Report portable failure
         if: failure()
         env:
@@ -167,7 +150,6 @@ jobs:
             done
           } > "$report"
           gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file "$report"
-
   wdk:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening'
     needs: portable
@@ -183,12 +165,10 @@ jobs:
           ref: ${{ needs.portable.outputs.base_sha }}
           fetch-depth: 0
           submodules: recursive
-
       - uses: actions/download-artifact@v4
         with:
           name: extfs-pre-ms-qualified-patch
           path: ${{ runner.temp }}\extfs-qualified
-
       - name: Apply exact qualified patch
         shell: powershell
         run: |
@@ -199,13 +179,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "git apply failed with exit code $LASTEXITCODE" }
           git diff --check
           if ($LASTEXITCODE -ne 0) { throw 'Qualified patch failed git diff --check.' }
-
       - name: Verify filesystem and installer contracts
         shell: powershell
         run: |
           .\windows\test\Test-FilesystemContracts.ps1
           .\windows\test\Test-InstallerContract.ps1
-
       - name: Locate NuGet
         timeout-minutes: 5
         shell: powershell
@@ -214,7 +192,6 @@ jobs:
               choco install nuget.commandline -y --no-progress
               if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
           }
-
       - name: Ensure full WDK validation tools
         timeout-minutes: 15
         shell: powershell
@@ -225,19 +202,16 @@ jobs:
               & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
               if ($LASTEXITCODE -ne 0) { throw "WDK installation failed with exit code $LASTEXITCODE." }
           }
-
       - name: Build analyse and validate WDK package
         shell: powershell
         timeout-minutes: 30
         run: .\windows\Build-And-Validate.ps1 -Configuration Release -Platform '${{ matrix.platform }}'
-
       - name: Report WDK failure
         if: failure()
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh issue comment '${{ github.event.issue.number }}' --repo '${{ github.repository }}' --body "WDK FAIL: ${{ matrix.platform }} for detached candidate ${{ needs.portable.outputs.source_sha }}. main was not moved."
-
   report:
     if: github.event.issue.title == '[HAL] Run ExtFS pre-MS hardening' && success()
     needs: [portable, wdk]
