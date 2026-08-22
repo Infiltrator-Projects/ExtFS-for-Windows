@@ -1,0 +1,100 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Publish ExtFS 0.9.5 qualified artifact
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish-qualified:
+    if: github.head_ref == 'release-095-observable'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Wait for qualified x64 WDK job
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: '32571093440'
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 120); do
+            job_json=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$SOURCE_RUN/jobs?per_page=100")
+            status=$(printf '%s' "$job_json" | jq -r '.jobs[] | select(.name=="Package x64") | .status')
+            conclusion=$(printf '%s' "$job_json" | jq -r '.jobs[] | select(.name=="Package x64") | .conclusion // ""')
+            echo "Package x64: status=$status conclusion=$conclusion"
+            if [ "$status" = "completed" ]; then
+              [ "$conclusion" = "success" ] || { echo "x64 WDK/package job failed: $conclusion"; exit 1; }
+              exit 0
+            fi
+            sleep 10
+          done
+          echo 'Timed out waiting for the qualified x64 WDK/package job.'
+          exit 1
+
+      - name: Download and verify qualified package artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_RUN: '32571093440'
+        run: |
+          set -euo pipefail
+          mkdir -p artifact
+          gh run download "$SOURCE_RUN" --repo "$GITHUB_REPOSITORY" --name extfs-095-x64-wdk-package --dir artifact
+          setup=$(find artifact -type f -name 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe' -print -quit)
+          report=$(find artifact -type f -name 'build-report.txt' -print -quit)
+          inf=$(find artifact -type f -name 'extfs.inf' -print -quit)
+          [ -n "$setup" ] && [ -n "$report" ] && [ -n "$inf" ] || { echo 'Qualified artifact is incomplete.'; exit 1; }
+          grep -Eq '^PackageVersion: 0\.9\.5\r?$' "$report"
+          grep -Eq '^FinalArchitecture: x64\r?$' "$report"
+          tr -d '\r[:space:]' < "$inf" | grep -q 'DriverVer=08/20/2026,0.9.3.0'
+          sha=$(sha256sum "$setup" | awk '{print toupper($1)}')
+          echo "EXTFS_SETUP_PATH=$setup" >> "$GITHUB_ENV"
+          echo "EXTFS_SETUP_SHA256=$sha" >> "$GITHUB_ENV"
+          echo "Qualified installer SHA-256: $sha"
+
+      - name: Publish and verify v0.9.5
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          ExtFS for Windows 0.9.5 is an installer-only architecture-detection hotfix carrying the already-qualified ExtFS 0.9.3.0 filesystem driver.
+
+          Fixed:
+          - removes the broken machine-scoped PROCESSOR_ARCHITECTURE check that falsely rejected genuine x64 Windows systems;
+          - uses RuntimeInformation.OSArchitecture with a WOW64-safe fallback;
+          - independently verifies the bundled driver's PE machine before installation;
+          - retains the 0.9.4 filesystem-service ImagePath and service-contract fixes;
+          - retains Infiltratr Common 1.9.0.
+
+          Installer SHA-256: $EXTFS_SETUP_SHA256
+          EOF
+
+          if gh release view v0.9.5 --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload v0.9.5 "$EXTFS_SETUP_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create v0.9.5 "$EXTFS_SETUP_PATH" --repo "$GITHUB_REPOSITORY" --target b8aaa45ad993d7c044d830f2bbd7c2ab4396d023 --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
+          fi
+
+          release_json=$(gh release view v0.9.5 --repo "$GITHUB_REPOSITORY" --json tagName,name,assets,isDraft,isPrerelease,targetCommitish)
+          [ "$(printf '%s' "$release_json" | jq -r '.tagName')" = 'v0.9.5' ]
+          [ "$(printf '%s' "$release_json" | jq -r '.name')" = 'ExtFS for Windows 0.9.5' ]
+          [ "$(printf '%s' "$release_json" | jq -r '.isDraft')" = 'false' ]
+          [ "$(printf '%s' "$release_json" | jq -r '.isPrerelease')" = 'false' ]
+          [ "$(printf '%s' "$release_json" | jq '[.assets[] | select(.name=="ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe")] | length')" = '1' ]
+          echo 'Published and verified ExtFS for Windows v0.9.5.'
+
+      - name: Close publication PR and delete temporary branch
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          gh pr close "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --comment 'ExtFS 0.9.5 published from the qualified x64 WDK artifact; removing the one-shot publication branch.'
+          gh api --method DELETE "repos/$GITHUB_REPOSITORY/git/refs/heads/release-095-observable"
