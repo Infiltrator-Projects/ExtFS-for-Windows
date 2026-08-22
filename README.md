@@ -33,7 +33,7 @@ BUILD-EXTFS.cmd setup x64
 BUILD-EXTFS.cmd setup ARM64
 ```
 
-The expected packages are `ExtFS-for-Windows-0.9.6-experimental-x64-setup.exe` and `ExtFS-for-Windows-0.9.6-experimental-arm64-setup.exe`. Both are test-signed experimental kernel-driver packages, not production filesystems. The installer detects the native Windows architecture, independently verifies the bundled driver PE architecture, and only hard-blocks restart states that are specific to ExtFS or to a TESTSIGNING change requested by ExtFS. See `docs/ARM64_TESTING.md` before replacing any existing ARM64 filesystem driver.
+The expected packages are `ExtFS-for-Windows-0.9.6-experimental-x64-setup.exe` and `ExtFS-for-Windows-0.9.6-experimental-arm64-setup.exe`. Both are test-signed experimental kernel-driver packages, not production filesystems. The installer detects the native Windows architecture, independently verifies the bundled driver PE architecture, and only hard-blocks restart states that are specific to ExtFS or to a TESTSIGNING change requested by ExtFS. The GitHub release publishes the x64 installer used for the Windows test path; ARM64 remains available through the qualified package workflow. See `docs/ARM64_TESTING.md` before replacing any existing ARM64 filesystem driver.
 
 ## Deliberate boundaries
 
