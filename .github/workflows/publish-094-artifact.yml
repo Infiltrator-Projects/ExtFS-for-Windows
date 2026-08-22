@@ -56,9 +56,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $releaseUri = "https://api.github.com/repos/$env:GITHUB_REPOSITORY/releases/tags/v0.9.4"
           $releaseExists = $false
-          & gh release view v0.9.4 --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { $releaseExists = $true }
+          try {
+              Invoke-RestMethod -Uri $releaseUri -Headers $headers -Method Get | Out-Null
+              $releaseExists = $true
+          } catch {
+              $status = [int]$_.Exception.Response.StatusCode
+              if ($status -ne 404) { throw }
+          }
 
           $notes = @"
           ExtFS for Windows 0.9.4 is an installer-only hotfix for the 0.9.3 driver release.
@@ -84,7 +95,7 @@ jobs:
               & gh release create v0.9.4 "$env:EXTFS_SETUP_PATH" --repo $env:GITHUB_REPOSITORY --target ba07fbdcd03a2f21ced86b2ed47a1b658aa85836 --title 'ExtFS for Windows 0.9.4' --notes-file release-notes.md
               if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
           } else {
-              $existing = & gh release view v0.9.4 --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+              $existing = Invoke-RestMethod -Uri $releaseUri -Headers $headers -Method Get
               $asset = @($existing.assets | Where-Object name -eq 'ExtFS-for-Windows-0.9.4-experimental-x64-setup.exe')
               if ($asset.Count -eq 0) {
                   & gh release upload v0.9.4 "$env:EXTFS_SETUP_PATH" --repo $env:GITHUB_REPOSITORY --clobber
@@ -92,9 +103,8 @@ jobs:
               }
           }
 
-          $release = & gh release view v0.9.4 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0) { throw 'Unable to verify v0.9.4.' }
-          if ($release.tagName -ne 'v0.9.4' -or $release.name -ne 'ExtFS for Windows 0.9.4' -or $release.isDraft -or $release.isPrerelease) {
+          $release = Invoke-RestMethod -Uri $releaseUri -Headers $headers -Method Get
+          if ($release.tag_name -ne 'v0.9.4' -or $release.name -ne 'ExtFS for Windows 0.9.4' -or $release.draft -or $release.prerelease) {
               throw 'Published v0.9.4 release metadata is incorrect.'
           }
           $assets = @($release.assets | Where-Object name -eq 'ExtFS-for-Windows-0.9.4-experimental-x64-setup.exe')
@@ -107,8 +117,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
-          & gh pr close $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --comment 'ExtFS 0.9.4 was published from the already-qualified CI artifact; closing the one-shot publication trigger.'
-          if ($LASTEXITCODE -ne 0) { throw 'Failed to close the one-shot publication PR.' }
+          $headers = @{
+              Authorization = "Bearer $env:GH_TOKEN"
+              Accept = 'application/vnd.github+json'
+              'X-GitHub-Api-Version' = '2022-11-28'
+          }
+          $repo = $env:GITHUB_REPOSITORY
+          $closeBody = @{ state = 'closed' } | ConvertTo-Json
+          Invoke-RestMethod -Uri "https://api.github.com/repos/$repo/pulls/$env:PR_NUMBER" -Headers $headers -Method Patch -Body $closeBody -ContentType 'application/json' | Out-Null
 
           foreach ($branch in @(
               'release-094-artifact-publish',
@@ -117,10 +133,16 @@ jobs:
               'codex/extfs-arm64-test-readiness'
           )) {
               $encoded = [Uri]::EscapeDataString($branch)
-              & gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/$encoded" *> $null
-              if ($LASTEXITCODE -eq 0) {
+              $uri = "https://api.github.com/repos/$repo/git/refs/heads/$encoded"
+              try {
+                  Invoke-RestMethod -Uri $uri -Headers $headers -Method Delete | Out-Null
                   Write-Host "Deleted $branch"
-              } else {
-                  Write-Host "$branch was already absent or could not be deleted in this pass."
+              } catch {
+                  $status = [int]$_.Exception.Response.StatusCode
+                  if ($status -eq 404) {
+                      Write-Host "$branch is already absent."
+                  } else {
+                      throw
+                  }
               }
           }
