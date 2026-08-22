@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: GPL-3.0-or-later
+name: Publish verified ExtFS 0.9.4 artifact
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  actions: read
+  contents: write
+  pull-requests: write
+
+jobs:
+  publish:
+    if: github.head_ref == 'release-094-artifact-publish'
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - name: Download the already-qualified x64 package artifact
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Path artifact -Force | Out-Null
+          & gh run download 32569243508 --repo $env:GITHUB_REPOSITORY --name extfs-094-x64-wdk-package --dir artifact
+          if ($LASTEXITCODE -ne 0) { throw "Unable to download qualified run 32569243508 artifact." }
+
+      - name: Verify exact hotfix artifact
+        shell: powershell
+        run: |
+          $setup = Get-ChildItem -LiteralPath artifact -Filter 'ExtFS-for-Windows-0.9.4-experimental-x64-setup.exe' -File -Recurse | Select-Object -First 1
+          if (-not $setup) { throw 'The qualified 0.9.4 x64 installer is missing from the artifact.' }
+          $version = $setup.VersionInfo.FileVersion
+          if ($version -ne '0.9.4.0') { throw "Installer version mismatch: expected 0.9.4.0, found '$version'." }
+
+          $report = Get-ChildItem -LiteralPath artifact -Filter 'build-report.txt' -File -Recurse | Select-Object -First 1
+          if (-not $report) { throw 'Qualified build report is missing from the artifact.' }
+          $reportText = Get-Content -LiteralPath $report.FullName -Raw
+          if ($reportText -notmatch '(?m)^PackageVersion: 0\.9\.4\r?$') { throw 'Artifact build report does not identify package 0.9.4.' }
+          if ($reportText -notmatch '(?m)^FinalArchitecture: x64\r?$') { throw 'Artifact build report does not identify x64 as the final architecture.' }
+
+          $inf = Get-ChildItem -LiteralPath artifact -Filter 'extfs.inf' -File -Recurse | Select-Object -First 1
+          if (-not $inf) { throw 'Qualified staged INF is missing from the artifact.' }
+          $driverVer = Get-Content -LiteralPath $inf.FullName | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
+          if (($driverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Unexpected driver payload in installer hotfix: '$driverVer'." }
+
+          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup.FullName).Hash
+          "EXTFS_SETUP_PATH=$($setup.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "EXTFS_SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          Write-Host "Verified installer: $($setup.FullName)"
+          Write-Host "SHA-256: $hash"
+
+      - name: Publish and verify v0.9.4
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $releaseExists = $false
+          & gh release view v0.9.4 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { $releaseExists = $true }
+
+          $notes = @"
+          ExtFS for Windows 0.9.4 is an installer-only hotfix for the 0.9.3 driver release.
+
+          Fixed:
+          - corrected the malformed filesystem-service ImagePath that caused CreateService to succeed but StartService to fail with exit 6;
+          - service ImagePath is now exactly \SystemRoot\System32\drivers\extfs.sys;
+          - the installer validates ImagePath, filesystem service type and demand-start mode in the registry before loading;
+          - the File System load-order group is restored;
+          - failed driver loads now include recent Service Control Manager and Code Integrity diagnostics;
+          - CI now has a regression check for the service-path contract.
+
+          Driver payload: unchanged, already-qualified ExtFS 0.9.3.0 driver.
+          Shared dependency: Infiltratr Common 1.9.0 pinned at a65b279b40682791f2cfefb4d9bdc274790b0c77.
+
+          Development/test-signed experimental kernel driver. Use only on disposable/test Windows systems and backed-up test volumes.
+
+          Installer SHA-256: $env:EXTFS_SETUP_SHA256
+          "@
+          Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
+
+          if (-not $releaseExists) {
+              & gh release create v0.9.4 "$env:EXTFS_SETUP_PATH" --repo $env:GITHUB_REPOSITORY --target ba07fbdcd03a2f21ced86b2ed47a1b658aa85836 --title 'ExtFS for Windows 0.9.4' --notes-file release-notes.md
+              if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
+          } else {
+              $existing = & gh release view v0.9.4 --repo $env:GITHUB_REPOSITORY --json assets | ConvertFrom-Json
+              $asset = @($existing.assets | Where-Object name -eq 'ExtFS-for-Windows-0.9.4-experimental-x64-setup.exe')
+              if ($asset.Count -eq 0) {
+                  & gh release upload v0.9.4 "$env:EXTFS_SETUP_PATH" --repo $env:GITHUB_REPOSITORY --clobber
+                  if ($LASTEXITCODE -ne 0) { throw "GitHub release asset upload failed with exit code $LASTEXITCODE." }
+              }
+          }
+
+          $release = & gh release view v0.9.4 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to verify v0.9.4.' }
+          if ($release.tagName -ne 'v0.9.4' -or $release.name -ne 'ExtFS for Windows 0.9.4' -or $release.isDraft -or $release.isPrerelease) {
+              throw 'Published v0.9.4 release metadata is incorrect.'
+          }
+          $assets = @($release.assets | Where-Object name -eq 'ExtFS-for-Windows-0.9.4-experimental-x64-setup.exe')
+          if ($assets.Count -ne 1) { throw "Expected exactly one 0.9.4 x64 installer asset; found $($assets.Count)." }
+          Write-Host 'Published and verified ExtFS for Windows v0.9.4.'
+
+      - name: Close trigger PR and remove temporary branches
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          & gh pr close $env:PR_NUMBER --repo $env:GITHUB_REPOSITORY --comment 'ExtFS 0.9.4 was published from the already-qualified CI artifact; closing the one-shot publication trigger.'
+          if ($LASTEXITCODE -ne 0) { throw 'Failed to close the one-shot publication PR.' }
+
+          foreach ($branch in @(
+              'release-094-artifact-publish',
+              'hotfix-0.9.4-installer-path',
+              'codex/extfs-arm64-publish-fix',
+              'codex/extfs-arm64-test-readiness'
+          )) {
+              $encoded = [Uri]::EscapeDataString($branch)
+              & gh api --method DELETE "repos/$env:GITHUB_REPOSITORY/git/refs/heads/$encoded" *> $null
+              if ($LASTEXITCODE -eq 0) {
+                  Write-Host "Deleted $branch"
+              } else {
+                  Write-Host "$branch was already absent or could not be deleted in this pass."
+              }
+          }
