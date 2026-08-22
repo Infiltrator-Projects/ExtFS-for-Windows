@@ -45,7 +45,7 @@ if (-not $principal.IsInRole(
 if ($LASTEXITCODE -eq 0) {
     & sc.exe stop $serviceName *> $null
     if (-not (Wait-ServiceStopped -Name $serviceName)) {
-        Write-Warning 'ExtFS 0.9.3 is intentionally resident for this boot; restart Windows to complete driver removal.'
+        Write-Warning 'ExtFS 0.9.4 is intentionally resident for this boot; restart Windows to complete driver removal.'
     }
     & sc.exe delete $serviceName *> $null
     if (-not (Wait-ServiceRemoved -Name $serviceName)) {
