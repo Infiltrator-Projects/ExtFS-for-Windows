@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# One-shot detached qualification gate; removed by the qualified candidate.
 name: Detached pre-MS ExtFS qualification
 
 on:
