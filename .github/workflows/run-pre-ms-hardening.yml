@@ -60,7 +60,7 @@ jobs:
       - name: Portable unit and real-image qualification
         run: |
           sudo apt-get update
-          sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64 powershell
+          sudo apt-get install -y e2fsprogs make gcc gcc-mingw-w64-x86-64 binutils-mingw-w64-x86-64
           make clean
           make
           ./build/test-extfs
