@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
+# One-shot publication trigger after the 0.9.5 contract-test false positive was fixed on main.
 name: Publish ExtFS 0.9.5 observable
 
 on:
