@@ -16,7 +16,7 @@ $inf = Join-Path $release 'extfs.inf'
 $catalog = Join-Path $release 'extfs.cat'
 $certificateFile = Join-Path $release 'extfs-test.cer'
 $buildScript = Join-Path $PSScriptRoot 'Build-And-Validate.ps1'
-$packageVersion = '0.9.5'
+$packageVersion = '0.9.6'
 
 function Find-WindowsKitTool {
     param([Parameter(Mandatory)][string]$Name)
