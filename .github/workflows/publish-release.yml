@@ -1,64 +1,74 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-name: Publish ExtFS 0.9.5 architecture hotfix
+name: Publish ExtFS release
 
 on:
-  workflow_dispatch:
+  workflow_run:
+    workflows: ["Portable ExtFS CI"]
+    types: [completed]
 
 permissions:
   contents: read
 
+concurrency:
+  group: publish-release-${{ github.repository }}
+  cancel-in-progress: false
+
 jobs:
-  publish-v095:
+  publish:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      startsWith(github.event.workflow_run.head_commit.message, 'Release ')
     runs-on: windows-latest
-    timeout-minutes: 50
+    timeout-minutes: 70
     permissions:
       contents: write
+    env:
+      EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event.workflow_run.head_sha }}
           fetch-depth: 0
           submodules: recursive
 
-      - name: Verify exact current main and immutable release target
-        timeout-minutes: 2
+      - name: Resolve exact release source
+        id: release
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           git fetch origin main --tags
-          if ((git rev-parse HEAD).Trim() -ne (git rev-parse origin/main).Trim()) {
-              throw 'Release workflow is not running from exact current main.'
+          $head = (git rev-parse HEAD).Trim()
+          $main = (git rev-parse origin/main).Trim()
+          if ($head -ne $env:EXPECTED_SHA -or $main -ne $env:EXPECTED_SHA) {
+              throw "Release source $head is not exact current main $main."
           }
-          if (git rev-parse -q --verify refs/tags/v0.9.5 2>$null) {
-              throw 'Release tag v0.9.5 already exists; published releases are immutable.'
+          $script = Get-Content -LiteralPath 'windows\Build-ExperimentalSetup.ps1' -Raw
+          if ($script -notmatch "\$packageVersion\s*=\s*'([0-9]+\.[0-9]+\.[0-9]+)'") {
+              throw 'Could not determine ExtFS package version.'
           }
-          & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { throw 'Release v0.9.5 already exists; published releases are immutable.' }
+          $version = $Matches[1]
+          $subject = (git log -1 --format=%s $head).Trim()
+          if ($subject -ne "Release $version" -and -not $subject.StartsWith("Release ${version}:")) {
+              throw "Release commit subject must begin with Release $version."
+          }
+          $tag = "v$version"
+          if (git rev-parse -q --verify "refs/tags/$tag" 2>$null) {
+              throw "Release tag $tag already exists; published releases are immutable."
+          }
+          & gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; published releases are immutable." }
           $global:LASTEXITCODE = 0
-
-      - name: Verify release source and installer contracts
-        timeout-minutes: 2
-        shell: powershell
-        run: |
-          if ((Get-Content -LiteralPath 'third_party\infiltratr-common\VERSION' -Raw).Trim() -ne '1.9.0') {
-              throw 'Infiltratr Common is not pinned at 1.9.0.'
-          }
-          .\windows\test\Test-InstallerContract.ps1
-
-          # 0.9.5 repairs installer architecture detection only. The filesystem
-          # driver payload remains the already-qualified 0.9.3.0 driver.
-          $sourceDriverVer = Get-Content -LiteralPath 'windows\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
-          if (($sourceDriverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') {
-              throw "Unexpected driver payload version for installer hotfix: '$sourceDriverVer'."
-          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+          "tag=$tag" >> $env:GITHUB_OUTPUT
 
       - name: Locate NuGet
         timeout-minutes: 5
         shell: powershell
         run: |
-          $nuget = Get-Command nuget.exe -ErrorAction SilentlyContinue
-          if (-not $nuget) {
+          if (-not (Get-Command nuget.exe -ErrorAction SilentlyContinue)) {
               choco install nuget.commandline -y --no-progress
               if ($LASTEXITCODE -ne 0) { throw "Chocolatey NuGet install failed with exit code $LASTEXITCODE." }
           }
@@ -72,7 +82,9 @@ jobs:
               $winget = Get-Command winget.exe -ErrorAction Stop
               & $winget.Source install --source winget --exact --id Microsoft.WindowsWDK.10.0.28000 --accept-package-agreements --accept-source-agreements --silent --disable-interactivity
               if ($LASTEXITCODE -ne 0) { throw "WDK WinGet installation failed with exit code $LASTEXITCODE." }
+              $inf2cat = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10" -Filter Inf2Cat.exe -File -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
           }
+          if (-not $inf2cat) { throw 'Full WDK installed but Inf2Cat.exe is still unavailable.' }
 
       - name: Ensure NSIS
         timeout-minutes: 5
@@ -83,57 +95,69 @@ jobs:
               if ($LASTEXITCODE -ne 0) { throw "Chocolatey NSIS install failed with exit code $LASTEXITCODE." }
           }
 
-      - name: Build and verify x64 hotfix installer
-        timeout-minutes: 25
+      - name: Build and verify x64 and ARM64 installers
+        timeout-minutes: 35
         shell: powershell
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
         run: |
-          .\windows\Build-ExperimentalSetup.ps1 -Platform x64 -SkipCodeAnalysis
-          $setup = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
-          if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
-          $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
-          if ($version -ne '0.9.5.0') { throw "Installer version mismatch: expected 0.9.5.0, found '$version'." }
-          $driverVer = Get-Content -LiteralPath 'release\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
-          if (($driverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Staged driver payload mismatch: '$driverVer'." }
-          $report = Get-Content -LiteralPath 'release\driver\build-report.txt' -Raw
-          if ($report -notmatch '(?m)^PackageVersion: 0\.9\.5\r?$') { throw 'Package-version evidence is missing.' }
-          $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash
-          "EXTFS_SETUP_SHA256=$hash" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          Write-Host "Installer SHA-256: $hash"
+          foreach ($platform in @('x64','ARM64')) {
+              .\windows\Build-ExperimentalSetup.ps1 -Platform $platform
+              $slug = if ($platform -eq 'ARM64') { 'arm64' } else { 'x64' }
+              $setup = "ExtFS-for-Windows-$env:VERSION-experimental-$slug-setup.exe"
+              if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
+              $fileVersion = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
+              if (-not $fileVersion.StartsWith("$env:VERSION.")) { throw "Installer version mismatch: $fileVersion" }
+          }
+          .\windows\test\Test-InstallerContract.ps1
+          .\windows\test\Test-FilesystemContracts.ps1
 
-      - name: Publish and verify GitHub Release v0.9.5
+      - name: Build source archive and checksums
+        shell: powershell
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          $source = "ExtFS-for-Windows-$env:VERSION-source.zip"
+          git archive --format=zip --output=$source HEAD
+          if (-not (Test-Path -LiteralPath $source)) { throw 'Source archive was not created.' }
+          $assets = @(
+              "ExtFS-for-Windows-$env:VERSION-experimental-x64-setup.exe",
+              "ExtFS-for-Windows-$env:VERSION-experimental-arm64-setup.exe",
+              $source
+          )
+          $lines = foreach ($asset in $assets) {
+              $hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $asset).Hash.ToLowerInvariant()
+              "$hash  $asset"
+          }
+          $lines | Set-Content -LiteralPath SHA256SUMS.txt -Encoding ascii
+
+      - name: Publish immutable release
         timeout-minutes: 5
         shell: powershell
         env:
           GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.release.outputs.version }}
+          TAG: ${{ steps.release.outputs.tag }}
         run: |
-          $setup = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
-          $target = (git rev-parse HEAD).Trim()
-          $notes = @"
-          ExtFS for Windows 0.9.5 is an installer-only architecture-detection hotfix for the 0.9.3 driver release.
+          git fetch origin main --tags
+          $head = (git rev-parse HEAD).Trim()
+          $main = (git rev-parse origin/main).Trim()
+          if ($head -ne $env:EXPECTED_SHA -or $main -ne $env:EXPECTED_SHA) { throw 'main moved after release verification.' }
+          if (git rev-parse -q --verify "refs/tags/$env:TAG" 2>$null) { throw "Release tag $env:TAG already exists; published releases are immutable." }
+          & gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw "Release $env:TAG already exists; published releases are immutable." }
+          $global:LASTEXITCODE = 0
 
-          Fixed:
-          - removes the broken NSIS machine-scoped PROCESSOR_ARCHITECTURE check that falsely rejected genuine x64 Windows systems;
-          - detects native Windows architecture with RuntimeInformation.OSArchitecture;
-          - retains a WOW64-safe PROCESSOR_ARCHITEW6432 fallback;
-          - independently verifies the bundled driver's PE machine field before installation;
-          - retains the 0.9.4 service ImagePath fix and service-contract validation;
-          - adds regression coverage preventing the broken machine-scoped lookup from returning.
+          git tag $env:TAG $head
+          git push origin $env:TAG
 
-          Driver payload: unchanged 0.9.3.0 filesystem driver.
-          Shared dependency: Infiltratr Common 1.9.0 pinned at a65b279b40682791f2cfefb4d9bdc274790b0c77.
+          $x64 = "ExtFS-for-Windows-$env:VERSION-experimental-x64-setup.exe"
+          $arm64 = "ExtFS-for-Windows-$env:VERSION-experimental-arm64-setup.exe"
+          $source = "ExtFS-for-Windows-$env:VERSION-source.zip"
+          & gh release create $env:TAG $x64 $arm64 $source SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --target $head --title "ExtFS for Windows $env:VERSION" --notes "Automatic release from tested exact current main."
+          if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
 
-          This installer is development/test signed and remains experimental. Use it only on disposable/test Windows systems and backed-up test volumes.
-
-          Installer SHA-256: $env:EXTFS_SETUP_SHA256
-          "@
-          Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
-          & gh release create v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --target $target --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
-          if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
-
-          $release = & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or $release.tagName -ne 'v0.9.5' -or $release.name -ne 'ExtFS for Windows 0.9.5' -or $release.isDraft -or $release.isPrerelease) {
-              throw 'Published v0.9.5 release metadata is incorrect.'
+          $assets = & gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'
+          foreach ($expected in @($x64,$arm64,$source,'SHA256SUMS.txt')) {
+              if ($assets -notcontains $expected) { throw "Published release is missing $expected" }
           }
-          $assets = @($release.assets | Where-Object name -eq $setup)
-          if ($assets.Count -ne 1) { throw "Expected exactly one installer asset '$setup'." }
-          Write-Host "Published and verified v0.9.5 with $setup"
