@@ -9,11 +9,11 @@ windres=x86_64-w64-mingw32-windres
 
 common_root="$root/third_party/infiltratr-common"
 if [ ! -f "$common_root/VERSION" ]; then
-    echo "Infiltratr Common 1.9.0 is missing. Clone with --recurse-submodules." >&2
+    echo "Infiltratr Common 1.11.0 is missing. Clone with --recurse-submodules." >&2
     exit 1
 fi
-if [ "$(cat "$common_root/VERSION")" != "1.9.0" ]; then
-    echo "ExtFS requires Infiltratr Common 1.9.0." >&2
+if [ "$(cat "$common_root/VERSION")" != "1.11.0" ]; then
+    echo "ExtFS requires Infiltratr Common 1.11.0." >&2
     exit 1
 fi
 
