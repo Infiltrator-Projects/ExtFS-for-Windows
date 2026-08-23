@@ -29,7 +29,7 @@ Version 0.9.5 is an installer architecture-detection hotfix carrying the already
 
 The portable core is freestanding C with no operating-system headers, internal heap allocation, threads or global mutable state. Windows kernel integration lives at the adapter/driver boundary.
 
-The Windows adapter consumes only the kernel-safe compiler-annotation header from pinned Infiltratr Common 1.9.0. Common user-mode runtime sources are not linked into `extfs.sys`.
+The Windows adapter consumes only the kernel-safe compiler-annotation header from pinned Infiltratr Common 1.11.0. Common user-mode runtime sources are not linked into `extfs.sys`.
 
 Unsupported layouts remain fail-closed. Double/triple-indirect classic mutation, broader multi-leaf/deeper ext4 extent trees, 64-bit/flex_bg metadata allocation, sparse/unwritten allocation, external journals, `bigalloc`, inline data, encrypted/casefolded layouts and unknown write-sensitive features are deliberately refused.
 
