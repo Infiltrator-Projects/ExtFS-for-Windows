@@ -2,16 +2,13 @@
 name: Publish ExtFS 0.9.5 architecture hotfix
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   publish-v095:
-    if: startsWith(github.event.head_commit.message, 'Publish ExtFS 0.9.5 architecture hotfix')
     runs-on: windows-latest
     timeout-minutes: 50
     permissions:
@@ -19,8 +16,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
           submodules: recursive
+
+      - name: Verify exact current main and immutable release target
+        timeout-minutes: 2
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main --tags
+          if ((git rev-parse HEAD).Trim() -ne (git rev-parse origin/main).Trim()) {
+              throw 'Release workflow is not running from exact current main.'
+          }
+          if (git rev-parse -q --verify refs/tags/v0.9.5 2>$null) {
+              throw 'Release tag v0.9.5 already exists; published releases are immutable.'
+          }
+          & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Release v0.9.5 already exists; published releases are immutable.' }
+          $global:LASTEXITCODE = 0
 
       - name: Verify release source and installer contracts
         timeout-minutes: 2
@@ -92,6 +107,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $setup = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
+          $target = (git rev-parse HEAD).Trim()
           $notes = @"
           ExtFS for Windows 0.9.5 is an installer-only architecture-detection hotfix for the 0.9.3 driver release.
 
@@ -111,7 +127,7 @@ jobs:
           Installer SHA-256: $env:EXTFS_SETUP_SHA256
           "@
           Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
-          & gh release create v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
+          & gh release create v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --target $target --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
 
           $release = & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
