@@ -22,11 +22,11 @@ $driverVersion = '0.9.3.0'
 $driverDate = '08/20/2026'
 $commonVersionFile = Join-Path $root 'third_party\infiltratr-common\VERSION'
 if (-not (Test-Path -LiteralPath $commonVersionFile)) {
-    throw 'Infiltratr Common 1.9.0 is missing. Clone ExtFS with --recurse-submodules.'
+    throw 'Infiltratr Common 1.11.0 is missing. Clone ExtFS with --recurse-submodules.'
 }
 $commonVersion = (Get-Content -LiteralPath $commonVersionFile -Raw).Trim()
-if ($commonVersion -ne '1.9.0') {
-    throw "ExtFS requires Infiltratr Common 1.9.0; found '$commonVersion'."
+if ($commonVersion -ne '1.11.0') {
+    throw "ExtFS requires Infiltratr Common 1.11.0; found '$commonVersion'."
 }
 
 function Get-PortableExecutableMachine {
@@ -90,7 +90,7 @@ function Add-WdkBuildToolsToPath {
           [Parameter(Mandatory)][string]$PackageName)
 
     # WDK MSBuild tasks launch helper programs such as StampInf through the
-    # process search path.  Prefer the helper from the pinned WDK package so
+    # process search path. Prefer the helper from the pinned WDK package so
     # that the executable version matches the headers/targets being built.
     $wdkPackage = Join-Path $RestoredPackages "$PackageName.$Version"
     $stampinf = $null
@@ -176,8 +176,8 @@ if (-not (Test-Path -LiteralPath $wdkProps)) {
 }
 
 # Microsoft's current WDK sample build flow enters the Visual Studio Developer
-# Shell for both installed-WDK and NuGet-WDK builds.  This supplies the normal
-# compiler/SDK environment expected by WDK MSBuild tasks.  We also expose the
+# Shell for both installed-WDK and NuGet-WDK builds. This supplies the normal
+# compiler/SDK environment expected by WDK MSBuild tasks. We also expose the
 # pinned WDK helper directory explicitly because tasks such as StampInf launch
 # their executable through PATH.
 Enter-VisualStudioDeveloperShell
