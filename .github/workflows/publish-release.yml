@@ -107,6 +107,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $setup = 'ExtFS-for-Windows-0.9.5-experimental-x64-setup.exe'
+          $target = (git rev-parse HEAD).Trim()
           $notes = @"
           ExtFS for Windows 0.9.5 is an installer-only architecture-detection hotfix for the 0.9.3 driver release.
 
@@ -126,7 +127,7 @@ jobs:
           Installer SHA-256: $env:EXTFS_SETUP_SHA256
           "@
           Set-Content -LiteralPath release-notes.md -Value $notes -Encoding utf8
-          & gh release create v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
+          & gh release create v0.9.5 $setup --repo $env:GITHUB_REPOSITORY --target $target --title 'ExtFS for Windows 0.9.5' --notes-file release-notes.md
           if ($LASTEXITCODE -ne 0) { throw "GitHub release creation failed with exit code $LASTEXITCODE." }
 
           $release = & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY --json tagName,name,assets,isDraft,isPrerelease,targetCommitish | ConvertFrom-Json
