@@ -2,16 +2,13 @@
 name: Publish ExtFS 0.9.5 architecture hotfix
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
   publish-v095:
-    if: startsWith(github.event.head_commit.message, 'Publish ExtFS 0.9.5 architecture hotfix')
     runs-on: windows-latest
     timeout-minutes: 50
     permissions:
@@ -19,8 +16,26 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
+          ref: main
           fetch-depth: 0
           submodules: recursive
+
+      - name: Verify exact current main and immutable release target
+        timeout-minutes: 2
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch origin main --tags
+          if ((git rev-parse HEAD).Trim() -ne (git rev-parse origin/main).Trim()) {
+              throw 'Release workflow is not running from exact current main.'
+          }
+          if (git rev-parse -q --verify refs/tags/v0.9.5 2>$null) {
+              throw 'Release tag v0.9.5 already exists; published releases are immutable.'
+          }
+          & gh release view v0.9.5 --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) { throw 'Release v0.9.5 already exists; published releases are immutable.' }
+          $global:LASTEXITCODE = 0
 
       - name: Verify release source and installer contracts
         timeout-minutes: 2
