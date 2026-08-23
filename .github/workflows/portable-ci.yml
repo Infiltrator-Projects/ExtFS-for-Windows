@@ -18,6 +18,22 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Enforce explicit release approval
+        shell: bash
+        run: |
+          set -euo pipefail
+          for release in \
+            .github/workflows/publish-release.yml \
+            .github/workflows/publish-arm64-test.yml; do
+            grep -qx '  workflow_dispatch:' "$release"
+            if grep -Eq '^  (push|workflow_run|schedule):' "$release"; then
+              echo "$release must remain manual-only." >&2
+              exit 1
+            fi
+            grep -Fq 'ref: main' "$release"
+            grep -Fq 'published releases are immutable' "$release"
+          done
+
       - name: GCC warnings-as-errors and unit tests
         run: |
           make clean
