@@ -19,16 +19,20 @@ ManifestSupportedOS all
 !error "TARGET_ARCH must be x64 or ARM64"
 !endif
 
-Name "ExtFS for Windows 0.9.5 Experimental (${TARGET_ARCH})"
-OutFile "ExtFS-for-Windows-0.9.5-experimental-${ARCH_SLUG}-setup.exe"
+!ifndef PACKAGE_VERSION
+!error "PACKAGE_VERSION must be supplied by Build-ExperimentalSetup.ps1"
+!endif
+
+Name "ExtFS for Windows ${PACKAGE_VERSION} Experimental (${TARGET_ARCH})"
+OutFile "ExtFS-for-Windows-${PACKAGE_VERSION}-experimental-${ARCH_SLUG}-setup.exe"
 InstallDir "$PROGRAMFILES64\ExtFS"
 BrandingText "ExtFS Project"
 
-VIProductVersion "0.9.5.0"
+VIProductVersion "${PACKAGE_VERSION}.0"
 VIAddVersionKey "ProductName" "ExtFS for Windows"
 VIAddVersionKey "CompanyName" "Shannon Smith"
 VIAddVersionKey "FileDescription" "ExtFS experimental ${TARGET_ARCH} setup"
-VIAddVersionKey "FileVersion" "0.9.5.0"
+VIAddVersionKey "FileVersion" "${PACKAGE_VERSION}.0"
 VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 
 !define MUI_ABORTWARNING
@@ -48,7 +52,7 @@ VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
 ; genuine x64 host and falsely reject the package before installation begins.
 Function .onInit
     MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL \
-        "ExtFS 0.9.5 is a test-only kernel-driver checkpoint. This release fixes native Windows architecture detection and carries the already-qualified 0.9.3 driver payload. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
+        "ExtFS ${PACKAGE_VERSION} is a test-only kernel-driver checkpoint carrying the qualified 0.9.3 driver payload. Use it only on a disposable test system and a fully backed-up test volume. Start with read-only access. A driver defect can crash Windows or corrupt data.$\r$\n$\r$\nContinue?" \
         IDOK continue
     Abort
 continue:
@@ -62,6 +66,7 @@ Section "Install ExtFS" SecMain
     File "..\..\release\driver\extfs.inf"
     File "..\..\release\driver\extfs.cat"
     File "..\..\release\driver\extfs-test.cer"
+    File "..\..\VERSION"
     File "Install-ExtFS.ps1"
     File "Uninstall-ExtFS.ps1"
     File "..\test\Test-HostReadiness.ps1"
@@ -83,13 +88,13 @@ Section "Install ExtFS" SecMain
     ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayName" "ExtFS for Windows 0.9.5 Experimental (${TARGET_ARCH})"
+        "DisplayName" "ExtFS for Windows ${PACKAGE_VERSION} Experimental (${TARGET_ARCH})"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "UninstallString" '"$INSTDIR\Uninstall-ExtFS.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "Publisher" "Shannon Smith"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayVersion" "0.9.5"
+        "DisplayVersion" "${PACKAGE_VERSION}"
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "NoModify" 1
     WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
@@ -106,6 +111,7 @@ Section "Uninstall"
     Delete "$INSTDIR\extfs.inf"
     Delete "$INSTDIR\extfs.cat"
     Delete "$INSTDIR\extfs-test.cer"
+    Delete "$INSTDIR\VERSION"
     Delete "$INSTDIR\Install-ExtFS.ps1"
     Delete "$INSTDIR\Uninstall-ExtFS.ps1"
     Delete "$INSTDIR\Test-HostReadiness.ps1"

@@ -45,11 +45,10 @@ jobs:
           if ($head -ne $env:EXPECTED_SHA -or $main -ne $env:EXPECTED_SHA) {
               throw "Release source $head is not exact current main $main."
           }
-          $script = Get-Content -LiteralPath 'windows\Build-ExperimentalSetup.ps1' -Raw
-          if ($script -notmatch "\$packageVersion\s*=\s*'([0-9]+\.[0-9]+\.[0-9]+)'") {
-              throw 'Could not determine ExtFS package version.'
+          $version = (Get-Content -LiteralPath 'VERSION' -Raw).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+$') {
+              throw "Invalid ExtFS package VERSION '$version'."
           }
-          $version = $Matches[1]
           $subject = (git log -1 --format=%s $head).Trim()
           if ($subject -ne "Release $version" -and -not $subject.StartsWith("Release ${version}:")) {
               throw "Release commit subject must begin with Release $version."

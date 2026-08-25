@@ -16,7 +16,14 @@ $inf = Join-Path $release 'extfs.inf'
 $catalog = Join-Path $release 'extfs.cat'
 $certificateFile = Join-Path $release 'extfs-test.cer'
 $buildScript = Join-Path $PSScriptRoot 'Build-And-Validate.ps1'
-$packageVersion = '0.9.6'
+$packageVersionFile = Join-Path $root 'VERSION'
+if (-not (Test-Path -LiteralPath $packageVersionFile)) {
+    throw "Package version file is missing: $packageVersionFile"
+}
+$packageVersion = (Get-Content -LiteralPath $packageVersionFile -Raw).Trim()
+if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Invalid package version '$packageVersion' in $packageVersionFile."
+}
 
 function Find-WindowsKitTool {
     param([Parameter(Mandatory)][string]$Name)
@@ -185,7 +192,7 @@ $setupName = "ExtFS-for-Windows-$packageVersion-experimental-$architectureSlug-s
 $installerScript = Join-Path $PSScriptRoot 'installer\extfs-installer.nsi'
 Push-Location (Split-Path -Parent $installerScript)
 try {
-    & $makensis "/DTARGET_ARCH=$Platform" $installerScript
+    & $makensis "/DTARGET_ARCH=$Platform" "/DPACKAGE_VERSION=$packageVersion" $installerScript
     if ($LASTEXITCODE -ne 0) { throw "NSIS failed with exit code $LASTEXITCODE." }
     $setup = Join-Path (Get-Location) $setupName
     if (-not (Test-Path -LiteralPath $setup)) { throw 'NSIS did not produce the expected setup file.' }

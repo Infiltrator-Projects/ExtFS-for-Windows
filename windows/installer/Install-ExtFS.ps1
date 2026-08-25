@@ -6,7 +6,14 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-$packageVersion = '0.9.5'
+$packageVersionFile = Join-Path $PSScriptRoot 'VERSION'
+if (-not (Test-Path -LiteralPath $packageVersionFile)) {
+    throw 'The installer package VERSION file is missing.'
+}
+$packageVersion = (Get-Content -LiteralPath $packageVersionFile -Raw).Trim()
+if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "The installer package VERSION value '$packageVersion' is invalid."
+}
 $serviceName = 'ExtFS'
 $installRoot = Join-Path $env:ProgramFiles 'ExtFS'
 $driverSource = Join-Path $PSScriptRoot 'extfs.sys'

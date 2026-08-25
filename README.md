@@ -6,7 +6,7 @@
 
 ExtFS for Windows is an original native Windows filesystem project written primarily in C. Its goal is native ext2/ext3/ext4 access through the normal Windows I/O stack, with the portable filesystem core kept independent from Windows-specific driver plumbing.
 
-**Current package version:** 0.9.5  
+**Current package version:** 0.9.6  
 **Filesystem driver payload:** 0.9.3.0  
 **Platforms:** Windows x64 and ARM64, plus a portable userspace qualification core  
 **Licence:** GPL-3.0-or-later
@@ -23,7 +23,7 @@ The current filesystem boundary includes:
 - bounded checksum-aware ext4 resize using inode-resident extents or one external depth-0 leaf beneath a depth-1 root; and
 - fail-closed rejection of unsupported write-sensitive layouts.
 
-Version 0.9.5 is an installer architecture-detection hotfix carrying the already-qualified 0.9.3.0 filesystem driver. It fixes false x64 rejection by using `RuntimeInformation.OSArchitecture` with a WOW64-safe fallback while retaining independent PE-machine validation and the earlier service-contract fixes.
+Version 0.9.6 is a packaging-consistency maintenance checkpoint carrying the already-qualified 0.9.3.0 filesystem driver. It retains the 0.9.5 native-architecture correction, pins Infiltratr Common 1.15.0 and derives every installer/build version from the single root `VERSION` file.
 
 ## Architecture
 

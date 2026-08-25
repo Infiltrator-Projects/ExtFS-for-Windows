@@ -76,16 +76,19 @@ jobs:
         run: |
           $platform = '${{ matrix.platform }}'
           $slug = '${{ matrix.slug }}'
+          $packageVersion = (Get-Content -LiteralPath 'VERSION' -Raw).Trim()
+          if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') { throw "Invalid package VERSION '$packageVersion'." }
           .\windows\Build-ExperimentalSetup.ps1 -Platform $platform
-          $setup = "ExtFS-for-Windows-0.9.5-experimental-$slug-setup.exe"
+          $setup = "ExtFS-for-Windows-$packageVersion-experimental-$slug-setup.exe"
           if (-not (Test-Path -LiteralPath $setup)) { throw "Expected installer not produced: $setup" }
           $version = (Get-Item -LiteralPath $setup).VersionInfo.FileVersion
-          if ($version -ne '0.9.5.0') { throw "Installer version mismatch: expected 0.9.5.0, found '$version'." }
+          $expectedVersion = "$packageVersion.0"
+          if ($version -ne $expectedVersion) { throw "Installer version mismatch: expected $expectedVersion, found '$version'." }
           $driverVer = Get-Content -LiteralPath 'release\driver\extfs.inf' | Where-Object { $_ -match '^\s*DriverVer\s*=' } | Select-Object -First 1
           if (($driverVer -replace '\s', '') -ne 'DriverVer=08/20/2026,0.9.3.0') { throw "Staged INF version mismatch: '$driverVer'." }
           $report = Get-Content -LiteralPath 'release\driver\build-report.txt' -Raw
           if ($report -notmatch "(?m)^Platform: $([regex]::Escape($platform))\r?$") { throw 'Build report platform mismatch.' }
-          if ($report -notmatch "(?m)^PackageVersion: 0\.9\.5\r?$") { throw 'Package-version evidence is missing.' }
+          if ($report -notmatch "(?m)^PackageVersion: $([regex]::Escape($packageVersion))\r?$") { throw 'Package-version evidence is missing.' }
           if ($report -notmatch "(?m)^FinalArchitecture: $([regex]::Escape($platform))\r?$") { throw 'Final package architecture evidence is missing.' }
           Write-Host "Installer SHA-256: $((Get-FileHash -Algorithm SHA256 -LiteralPath $setup).Hash)"
 
@@ -93,9 +96,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: extfs-095-${{ matrix.slug }}-wdk-package
+          name: extfs-wdk-package-${{ matrix.slug }}
           path: |
-            ExtFS-for-Windows-0.9.5-experimental-${{ matrix.slug }}-setup.exe
+            ExtFS-for-Windows-*-experimental-${{ matrix.slug }}-setup.exe
             release/driver/build-report.txt
             release/driver/extfs.inf
           if-no-files-found: ignore

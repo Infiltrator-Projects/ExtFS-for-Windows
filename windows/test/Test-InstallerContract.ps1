@@ -6,7 +6,12 @@ $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $installer = Join-Path $root 'windows\installer\Install-ExtFS.ps1'
 $nsi = Join-Path $root 'windows\installer\extfs-installer.nsi'
-foreach ($path in @($installer, $nsi)) {
+$packageBuilder = Join-Path $root 'windows\Build-ExperimentalSetup.ps1'
+$wdkWorkflow = Join-Path $root '.github\workflows\windows-wdk-ci.yml'
+$publishWorkflow = Join-Path $root '.github\workflows\publish-release.yml'
+$oneClickBuilder = Join-Path $root 'BUILD-EXTFS.cmd'
+$versionFile = Join-Path $root 'VERSION'
+foreach ($path in @($installer, $nsi, $packageBuilder, $wdkWorkflow, $publishWorkflow, $oneClickBuilder, $versionFile)) {
     if (-not (Test-Path -LiteralPath $path)) {
         throw "Installer source not found: $path"
     }
@@ -14,6 +19,14 @@ foreach ($path in @($installer, $nsi)) {
 
 $text = Get-Content -LiteralPath $installer -Raw
 $nsiText = Get-Content -LiteralPath $nsi -Raw
+$packageBuilderText = Get-Content -LiteralPath $packageBuilder -Raw
+$wdkWorkflowText = Get-Content -LiteralPath $wdkWorkflow -Raw
+$publishWorkflowText = Get-Content -LiteralPath $publishWorkflow -Raw
+$oneClickBuilderText = Get-Content -LiteralPath $oneClickBuilder -Raw
+$packageVersion = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+if ($packageVersion -notmatch '^\d+\.\d+\.\d+$') {
+    throw "Root VERSION '$packageVersion' is not semantic major.minor.patch."
+}
 $expectedAssignment = "`$serviceImagePath = '\SystemRoot\System32\drivers\extfs.sys'"
 $badAssignment = "`$serviceImagePath = '\\SystemRoot\\System32\\drivers\\extfs.sys'"
 
@@ -56,4 +69,26 @@ if ($nsiText -match '(?im)^\s*nsExec::ExecToStack.*PROCESSOR_ARCHITECTURE') {
     throw 'NSIS must not execute its own PROCESSOR_ARCHITECTURE architecture gate; PowerShell performs the authoritative OS and PE checks.'
 }
 
-Write-Host 'Installer service-path and native-architecture contracts: PASS'
+if ($packageBuilderText -notmatch [regex]::Escape("Join-Path `$root 'VERSION'") -or
+    $packageBuilderText -notmatch [regex]::Escape('"/DPACKAGE_VERSION=$packageVersion"')) {
+    throw 'Experimental package builder must read root VERSION and pass it to NSIS.'
+}
+if ($nsiText -notmatch [regex]::Escape('!ifndef PACKAGE_VERSION') -or
+    $nsiText -notmatch [regex]::Escape('${PACKAGE_VERSION}')) {
+    throw 'NSIS installer must consume the PACKAGE_VERSION build definition.'
+}
+if ($text -notmatch [regex]::Escape("Join-Path `$PSScriptRoot 'VERSION'")) {
+    throw 'Installed PowerShell setup must read the bundled VERSION file.'
+}
+if ($wdkWorkflowText -notmatch [regex]::Escape("Get-Content -LiteralPath 'VERSION'") -or
+    $publishWorkflowText -notmatch [regex]::Escape("Get-Content -LiteralPath 'VERSION'") -or
+    $oneClickBuilderText -notmatch [regex]::Escape('set /p "PACKAGE_VERSION="<"%~dp0VERSION"')) {
+    throw 'CI, publishing and one-click builds must all resolve the root VERSION file.'
+}
+foreach ($source in @($packageBuilderText, $nsiText, $text, $wdkWorkflowText, $publishWorkflowText, $oneClickBuilderText)) {
+    if ($source -match "(?<![0-9])$([regex]::Escape($packageVersion))(?![0-9])") {
+        throw "Executable package source hard-codes current version $packageVersion instead of consuming VERSION."
+    }
+}
+
+Write-Host "Installer service-path, architecture and package-version contracts: PASS ($packageVersion)"
