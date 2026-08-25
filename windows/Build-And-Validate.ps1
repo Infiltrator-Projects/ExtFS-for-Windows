@@ -22,11 +22,11 @@ $driverVersion = '0.9.3.0'
 $driverDate = '08/20/2026'
 $commonVersionFile = Join-Path $root 'third_party\infiltratr-common\VERSION'
 if (-not (Test-Path -LiteralPath $commonVersionFile)) {
-    throw 'Infiltratr Common 1.11.0 is missing. Clone ExtFS with --recurse-submodules.'
+    throw 'Infiltratr Common 1.15.0 is missing. Clone ExtFS with --recurse-submodules.'
 }
 $commonVersion = (Get-Content -LiteralPath $commonVersionFile -Raw).Trim()
-if ($commonVersion -ne '1.11.0') {
-    throw "ExtFS requires Infiltratr Common 1.11.0; found '$commonVersion'."
+if ($commonVersion -ne '1.15.0') {
+    throw "ExtFS requires Infiltratr Common 1.15.0; found '$commonVersion'."
 }
 
 function Get-PortableExecutableMachine {

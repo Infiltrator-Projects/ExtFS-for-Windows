@@ -45,4 +45,4 @@ The current 0.9.x self-signed installer remains an experimental development chec
 
 ## Shared dependency
 
-The Windows adapter remains pinned to Infiltratr Common 1.11.0. Driver signing does not alter that dependency boundary.
+The Windows adapter remains pinned to Infiltratr Common 1.15.0. Driver signing does not alter that dependency boundary.
