@@ -111,3 +111,43 @@ jobs:
             [void][scriptblock]::Create((Get-Content -LiteralPath $script -Raw))
           }
           Write-Host 'PowerShell syntax checks passed'
+
+  local-linux:
+    name: Local Linux / native qualification
+    runs-on: linux-native
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: GCC warnings-as-errors and unit tests
+        run: |
+          make clean
+          make all
+          ./build/test-extfs
+          ./build/test-single-indirect
+
+      - name: Real ext2/ext3/ext4 image qualification
+        run: make integration
+
+      - name: CMake and CTest
+        run: |
+          rm -rf build-cmake
+          cmake -S . -B build-cmake
+          cmake --build build-cmake --parallel
+          ctest --test-dir build-cmake --output-on-failure
+
+      - name: ASan and UBSan
+        run: |
+          make clean
+          make all CFLAGS='-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer' LDFLAGS='-fsanitize=address,undefined'
+          ./build/test-extfs
+          ./build/test-single-indirect
+
+      - name: Clang warnings-as-errors
+        run: |
+          make clean
+          make all CC=clang
+          ./build/test-extfs
+          ./build/test-single-indirect
