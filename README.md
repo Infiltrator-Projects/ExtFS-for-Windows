@@ -2,7 +2,7 @@
 
 # ExtFS for Windows
 
-[![Portable ExtFS CI](https://github.com/The-First-Infiltrator/ExtFS-for-Windows/actions/workflows/portable-ci.yml/badge.svg)](https://github.com/The-First-Infiltrator/ExtFS-for-Windows/actions/workflows/portable-ci.yml)
+[![Portable ExtFS CI](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml/badge.svg)](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml)
 
 ExtFS for Windows is an original native Windows filesystem project written primarily in C. Its goal is native ext2/ext3/ext4 access through the normal Windows I/O stack, with the portable filesystem core kept independent from Windows-specific driver plumbing.
 
@@ -48,7 +48,7 @@ make integration
 Windows package build with Visual Studio/WDK and NSIS:
 
 ```bat
-git clone --recurse-submodules https://github.com/The-First-Infiltrator/ExtFS-for-Windows.git
+git clone --recurse-submodules https://github.com/Infiltrator-Projects/ExtFS-for-Windows.git
 cd ExtFS-for-Windows
 BUILD-EXTFS.cmd setup x64
 BUILD-EXTFS.cmd setup ARM64
