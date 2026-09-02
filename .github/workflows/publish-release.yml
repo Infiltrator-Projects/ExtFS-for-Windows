@@ -39,6 +39,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           git fetch origin main --tags
           $head = (git rev-parse HEAD).Trim()
           $main = (git rev-parse origin/main).Trim()
@@ -138,6 +139,7 @@ jobs:
           VERSION: ${{ steps.release.outputs.version }}
           TAG: ${{ steps.release.outputs.tag }}
         run: |
+          $PSNativeCommandUseErrorActionPreference = $false
           git fetch origin main --tags
           $head = (git rev-parse HEAD).Trim()
           $main = (git rev-parse origin/main).Trim()
