@@ -58,9 +58,8 @@ jobs:
           if (git rev-parse -q --verify "refs/tags/$tag" 2>$null) {
               throw "Release tag $tag already exists; published releases are immutable."
           }
-          & gh release view $tag --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Release $tag already exists; published releases are immutable." }
-          $global:LASTEXITCODE = 0
+          $existingRelease = (& gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName | ConvertFrom-Json | Where-Object { $_.tagName -eq $tag })
+          if ($existingRelease) { throw "Release $tag already exists; published releases are immutable." }
           "version=$version" >> $env:GITHUB_OUTPUT
           "tag=$tag" >> $env:GITHUB_OUTPUT
 
@@ -145,9 +144,8 @@ jobs:
           $main = (git rev-parse origin/main).Trim()
           if ($head -ne $env:EXPECTED_SHA -or $main -ne $env:EXPECTED_SHA) { throw 'main moved after release verification.' }
           if (git rev-parse -q --verify "refs/tags/$env:TAG" 2>$null) { throw "Release tag $env:TAG already exists; published releases are immutable." }
-          & gh release view $env:TAG --repo $env:GITHUB_REPOSITORY *> $null
-          if ($LASTEXITCODE -eq 0) { throw "Release $env:TAG already exists; published releases are immutable." }
-          $global:LASTEXITCODE = 0
+          $existingRelease = (& gh release list --repo $env:GITHUB_REPOSITORY --limit 100 --json tagName | ConvertFrom-Json | Where-Object { $_.tagName -eq $env:TAG })
+          if ($existingRelease) { throw "Release $env:TAG already exists; published releases are immutable." }
 
           git tag $env:TAG $head
           git push origin $env:TAG
