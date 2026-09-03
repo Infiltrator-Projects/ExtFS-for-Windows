@@ -114,7 +114,7 @@ jobs:
 
   local-linux:
     name: Local Linux / native qualification
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Linux, X64, linux-native]
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
