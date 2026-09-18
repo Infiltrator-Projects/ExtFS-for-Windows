@@ -2,7 +2,7 @@
 
 # Secure Boot signing and release policy
 
-ExtFS for Windows is intended to run on normal Windows systems with UEFI Secure Boot enabled. Disabling Secure Boot is a development-only fallback and is not an acceptable production requirement.
+Ext Filesystem Driver is intended to run on normal Windows systems with UEFI Secure Boot enabled. Disabling Secure Boot is a development-only fallback and is not an acceptable production requirement.
 
 ## Release classes
 

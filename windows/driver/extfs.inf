@@ -45,6 +45,6 @@ LoadOrderGroup = "File System"
 
 [Strings]
 ProviderName       = "Shannon Smith"
-DiskName           = "ExtFS for Windows installation media"
+DiskName           = "Ext Filesystem Driver installation media"
 ServiceName        = "ExtFS"
 ServiceDescription = "Experimental native ext2/ext3/ext4 filesystem driver with bounded ext2/ext3/ext4 file resize"

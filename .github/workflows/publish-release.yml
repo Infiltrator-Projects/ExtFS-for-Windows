@@ -153,7 +153,7 @@ jobs:
           $x64 = "ExtFS-for-Windows-$env:VERSION-experimental-x64-setup.exe"
           $arm64 = "ExtFS-for-Windows-$env:VERSION-experimental-arm64-setup.exe"
           $source = "ExtFS-for-Windows-$env:VERSION-source.zip"
-          & gh release create $env:TAG $x64 $arm64 $source SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --target $head --title "ExtFS for Windows $env:VERSION" --notes "Automatic release from tested exact current main."
+          & gh release create $env:TAG $x64 $arm64 $source SHA256SUMS.txt --repo $env:GITHUB_REPOSITORY --target $head --title "Ext Filesystem Driver $env:VERSION" --notes "Automatic release from tested exact current main."
           if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
 
           $assets = & gh release view $env:TAG --repo $env:GITHUB_REPOSITORY --json assets --jq '.assets[].name'

@@ -1,12 +1,12 @@
 <!-- SPDX-License-Identifier: GPL-3.0-or-later -->
 
-# ExtFS for Windows
+# Ext Filesystem Driver
 
 [![Portable ExtFS CI](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml/badge.svg)](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml)
 
-ExtFS for Windows is an original native Windows filesystem project written primarily in C. Its goal is native ext2/ext3/ext4 access through the normal Windows I/O stack, with the portable filesystem core kept independent from Windows-specific driver plumbing.
+Ext Filesystem Driver is an original native Windows filesystem project written primarily in C. Its goal is native ext2/ext3/ext4 access through the normal Windows I/O stack, with the portable filesystem core kept independent from Windows-specific driver plumbing.
 
-**Current package version:** 0.9.7  
+**Current package version:** 0.9.8  
 **Filesystem driver payload:** 0.9.3.0  
 **Platforms:** Windows x64 and ARM64, plus a portable userspace qualification core  
 **Licence:** GPL-3.0-or-later
@@ -23,7 +23,7 @@ The current filesystem boundary includes:
 - bounded checksum-aware ext4 resize using inode-resident extents or one external depth-0 leaf beneath a depth-1 root; and
 - fail-closed rejection of unsupported write-sensitive layouts.
 
-Version 0.9.7 is a packaging-consistency maintenance checkpoint carrying the already-qualified 0.9.3.0 filesystem driver. It retains the 0.9.5 native-architecture correction, pins Infiltratr Common 1.19.2 and derives every installer/build version from the single root `VERSION` file.
+Version 0.9.8 is a naming and packaging-consistency maintenance checkpoint carrying the already-qualified 0.9.3.0 filesystem driver. It retains the 0.9.5 native-architecture correction, pins Infiltratr Common 1.19.2 and derives every installer/build version from the single root `VERSION` file.
 
 ## Architecture
 
@@ -95,4 +95,4 @@ Manually runnable build/submission helpers are diagnostic or packaging tools onl
 
 ## Licence
 
-ExtFS for Windows is free software licensed under the GNU General Public License version 3 or, at your option, any later version (`GPL-3.0-or-later`). See `LICENSE`.
+Ext Filesystem Driver is free software licensed under the GNU General Public License version 3 or, at your option, any later version (`GPL-3.0-or-later`). See `LICENSE`.

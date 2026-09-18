@@ -23,13 +23,13 @@ ManifestSupportedOS all
 !error "PACKAGE_VERSION must be supplied by Build-ExperimentalSetup.ps1"
 !endif
 
-Name "ExtFS for Windows ${PACKAGE_VERSION} Experimental (${TARGET_ARCH})"
+Name "Ext Filesystem Driver ${PACKAGE_VERSION} Experimental (${TARGET_ARCH})"
 OutFile "ExtFS-for-Windows-${PACKAGE_VERSION}-experimental-${ARCH_SLUG}-setup.exe"
 InstallDir "$PROGRAMFILES64\ExtFS"
 BrandingText "ExtFS Project"
 
 VIProductVersion "${PACKAGE_VERSION}.0"
-VIAddVersionKey "ProductName" "ExtFS for Windows"
+VIAddVersionKey "ProductName" "Ext Filesystem Driver"
 VIAddVersionKey "CompanyName" "Shannon Smith"
 VIAddVersionKey "FileDescription" "ExtFS experimental ${TARGET_ARCH} setup"
 VIAddVersionKey "FileVersion" "${PACKAGE_VERSION}.0"
@@ -88,7 +88,7 @@ Section "Install ExtFS" SecMain
     ${EndIf}
 
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
-        "DisplayName" "ExtFS for Windows ${PACKAGE_VERSION} Experimental (${TARGET_ARCH})"
+        "DisplayName" "Ext Filesystem Driver ${PACKAGE_VERSION} Experimental (${TARGET_ARCH})"
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
         "UninstallString" '"$INSTDIR\Uninstall-ExtFS.exe"'
     WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\ExtFS" \
