@@ -6,7 +6,7 @@
 
 ExtFS for Windows is an original native Windows filesystem project written primarily in C. Its goal is native ext2/ext3/ext4 access through the normal Windows I/O stack, with the portable filesystem core kept independent from Windows-specific driver plumbing.
 
-**Current package version:** 0.9.6  
+**Current package version:** 0.9.7  
 **Filesystem driver payload:** 0.9.3.0  
 **Platforms:** Windows x64 and ARM64, plus a portable userspace qualification core  
 **Licence:** GPL-3.0-or-later
@@ -23,13 +23,13 @@ The current filesystem boundary includes:
 - bounded checksum-aware ext4 resize using inode-resident extents or one external depth-0 leaf beneath a depth-1 root; and
 - fail-closed rejection of unsupported write-sensitive layouts.
 
-Version 0.9.6 is a packaging-consistency maintenance checkpoint carrying the already-qualified 0.9.3.0 filesystem driver. It retains the 0.9.5 native-architecture correction, pins Infiltratr Common 1.15.0 and derives every installer/build version from the single root `VERSION` file.
+Version 0.9.7 is a packaging-consistency maintenance checkpoint carrying the already-qualified 0.9.3.0 filesystem driver. It retains the 0.9.5 native-architecture correction, pins Infiltratr Common 1.19.2 and derives every installer/build version from the single root `VERSION` file.
 
 ## Architecture
 
 The portable core is freestanding C with no operating-system headers, internal heap allocation, threads or global mutable state. Windows kernel integration lives at the adapter/driver boundary.
 
-The Windows adapter consumes only the kernel-safe compiler-annotation header from pinned Infiltratr Common 1.15.0. Common user-mode runtime sources are not linked into `extfs.sys`.
+The Windows adapter consumes only the kernel-safe compiler-annotation header from pinned Infiltratr Common 1.19.2. Common user-mode runtime sources are not linked into `extfs.sys`.
 
 Unsupported layouts remain fail-closed. Double/triple-indirect classic mutation, broader multi-leaf/deeper ext4 extent trees, 64-bit/flex_bg metadata allocation, sparse/unwritten allocation, external journals, `bigalloc`, inline data, encrypted/casefolded layouts and unknown write-sensitive features are deliberately refused.
 
