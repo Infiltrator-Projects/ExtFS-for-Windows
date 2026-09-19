@@ -11,6 +11,14 @@ Ext Filesystem Driver is an original native Windows filesystem project written p
 **Platforms:** Windows x64 and ARM64, plus a portable userspace qualification core  
 **Licence:** GPL-3.0-or-later
 
+## Engineering ethos
+
+What does it take to make ext filesystems behave as native Windows filesystems without making another driver or utility the product's foundation? Ext Filesystem Driver starts from the ext on-disk formats and the Windows I/O contract, then implements the supported intersection directly.
+
+Specifications, Linux behaviour, existing tools and other drivers are reference evidence; they are not runtime dependencies or substitutes for understanding the structures being modified. The portable filesystem core owns the parsing and mutation rules, while the Windows layer adapts those rules to the native kernel interface. When the evidence is insufficient for a safe write, the project refuses the operation rather than approximating it.
+
+Mature techniques are retained when they remain the strongest option. New code or dependencies are adopted because they improve correctness, safety, portability or maintainability, not merely because they are newer.
+
 ## Capabilities
 
 The current filesystem boundary includes:
