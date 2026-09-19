@@ -98,8 +98,8 @@ Manually runnable build/submission helpers are diagnostic or packaging tools onl
 - `docs/FEATURE_SUPPORT.md` — exact filesystem feature boundary.
 - `docs/SECURE_BOOT_SIGNING.md` — production signing path.
 - `docs/ARM64_TESTING.md` — ARM64 qualification.
-- `VERIFICATION.md` — verification evidence and checkpoints.
-- `ROADMAP.md` — planned filesystem/driver work.
+- `docs/VERIFICATION.md` — verification evidence and checkpoints.
+- `docs/ROADMAP.md` — planned filesystem/driver work.
 
 ## Licence
 
