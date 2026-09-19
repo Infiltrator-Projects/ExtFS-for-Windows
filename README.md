@@ -2,7 +2,7 @@
 
 # Ext Filesystem Driver
 
-**Project copyright:** © 2000–2026 Shannon Smith
+**Project copyright:** © 2000-2026 Shannon Smith
 
 [![Portable ExtFS CI](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml/badge.svg)](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml)
 

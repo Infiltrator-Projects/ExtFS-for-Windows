@@ -33,7 +33,7 @@ VIAddVersionKey "ProductName" "Ext Filesystem Driver"
 VIAddVersionKey "CompanyName" "Shannon Smith"
 VIAddVersionKey "FileDescription" "ExtFS experimental ${TARGET_ARCH} setup"
 VIAddVersionKey "FileVersion" "${PACKAGE_VERSION}.0"
-VIAddVersionKey "LegalCopyright" "Copyright (c) 2026 Shannon Smith"
+VIAddVersionKey "LegalCopyright" "Copyright (c) 2000-2026 Shannon Smith"
 
 !define MUI_ABORTWARNING
 !insertmacro MUI_PAGE_WELCOME

@@ -21,4 +21,4 @@ The Windows integration follows published Microsoft WDK/IFS interfaces:
 
 Microsoft FASTFAT/CDFS are architectural references only; their source is not copied into ExtFS.
 
-Copyright (c) 2026 Shannon Smith.
+Copyright (c) 2000-2026 Shannon Smith.
