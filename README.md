@@ -2,6 +2,8 @@
 
 # Ext Filesystem Driver
 
+**Project copyright:** © 2000–2026 Shannon Smith
+
 [![Portable ExtFS CI](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml/badge.svg)](https://github.com/Infiltrator-Projects/ExtFS-for-Windows/actions/workflows/portable-ci.yml)
 
 Ext Filesystem Driver is an original native Windows filesystem project written primarily in C. Its goal is native ext2/ext3/ext4 access through the normal Windows I/O stack, with the portable filesystem core kept independent from Windows-specific driver plumbing.
