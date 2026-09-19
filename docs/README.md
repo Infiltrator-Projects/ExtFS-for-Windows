@@ -1,33 +1,27 @@
 # Documentation
 
-This directory is the canonical documentation entry point for Ext Filesystem Driver. The Infiltrator project family uses the same baseline document roles in every repository so readers can move between projects without relearning the structure.
+This directory is the canonical documentation entry point for Ext Filesystem Driver.
 
 ## Canonical baseline
 
-- [Architecture](ARCHITECTURE.md) — ownership, layers, dependencies and system boundaries.
-- [Design](DESIGN.md) — first-principles goals, non-goals, trade-offs and failure philosophy.
-- [Roadmap](ROADMAP.md) — current foundation, near-term priorities and longer-term direction.
-- [Validation](VALIDATION.md) — automated, manual and environment-specific evidence boundaries.
-- [Project README](../README.md) — product overview, capabilities, build/use entry point and engineering ethos.
-- [Changelog](../CHANGELOG.md) — user-visible and contract-relevant change history.
-- [Contributing](../CONTRIBUTING.md) — development, ownership and verification rules.
-- [Security](../SECURITY.md) — vulnerability scope, reporting and response policy.
-
-## Documentation authority
-
-The baseline files have distinct responsibilities and should not compete as alternate sources of truth. Architecture describes where behaviour belongs; Design explains why; Roadmap describes direction; Validation records what evidence is required. Code and tests remain authoritative for executable behaviour, while immutable tags/releases identify historical source.
-
-Specialist documents may go deeper into one subsystem, protocol, platform, research area or historical investigation. They should link back to the canonical baseline when a reader needs the wider project context.
+- [Architecture](ARCHITECTURE.md) — portable core, Windows adapter and ownership boundaries.
+- [Design](DESIGN.md) — first-principles design, failure policy and engineering trade-offs.
+- [Decisions](DECISIONS.md) — durable architectural choices and consequences.
+- [Roadmap](ROADMAP.md) — versioned capability direction and support progression.
+- [Validation](VALIDATION.md) — evidence model and release criteria.
+- [Project README](../README.md) — product overview and build entry point.
+- [Changelog](../CHANGELOG.md) — user-visible and contract-relevant changes.
+- [Contributing](../CONTRIBUTING.md) — development and verification rules.
+- [Security](../SECURITY.md) — vulnerability reporting policy.
 
 ## Specialist documentation
 
-- ROADMAP.md — specialist or historical detail retained alongside the canonical baseline.
-- VERIFICATION.md — specialist or historical detail retained alongside the canonical baseline.
-- docs/FEATURE_SUPPORT.md — specialist or historical detail retained alongside the canonical baseline.
-- docs/ARM64_TESTING.md — specialist or historical detail retained alongside the canonical baseline.
-- docs/SECURE_BOOT_SIGNING.md — specialist or historical detail retained alongside the canonical baseline.
-- docs/WINDOWS_BUILD.md — specialist or historical detail retained alongside the canonical baseline.
+- [Verification record](VERIFICATION.md) — exact historical qualification evidence and deliberate non-claims.
+- [Feature support](FEATURE_SUPPORT.md) — detailed ext feature/support matrix.
+- [ARM64 testing](ARM64_TESTING.md) — ARM64-specific test boundary.
+- [Secure Boot signing](SECURE_BOOT_SIGNING.md) — production signing path.
+- [Windows build](WINDOWS_BUILD.md) — WDK/native build mechanics.
 
-## Maintenance rule
+## Authority
 
-When a change moves an ownership boundary, support boundary, validation claim or major design decision, update the corresponding canonical document in the same change. Avoid copying the same status statement into several files; link to the authoritative document instead.
+Roadmap states capability direction; Verification records exact historical results; Validation explains how evidence should be interpreted. Architecture and Design define current engineering boundaries rather than duplicating version history.
